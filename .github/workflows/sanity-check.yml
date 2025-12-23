@@ -1,0 +1,362 @@
+name: Sanity Check
+
+on:
+  workflow_call:
+    inputs:
+      project-type:
+        description: 'Project type (laravel, vue, react, dart, flutter, auto)'
+        type: string
+        default: 'auto'
+      php-version:
+        description: 'PHP version'
+        type: string
+        default: '8.3'
+      node-version:
+        description: 'Node.js version'
+        type: string
+        default: '20'
+      flutter-version:
+        description: 'Flutter version'
+        type: string
+        default: '3.38.4'
+      # Vue/JS checks
+      vue-max-loc:
+        description: 'Max lines of code for Vue files'
+        type: number
+        default: 700
+      check-native-inputs:
+        description: 'Check for native HTML inputs (should use shadcn/ui)'
+        type: boolean
+        default: true
+      check-vue-types:
+        description: 'Check for type definitions inside .vue files'
+        type: boolean
+        default: true
+      # Laravel checks
+      check-missing-requests:
+        description: 'Check for missing FormRequest classes'
+        type: boolean
+        default: true
+      check-column-mismatches:
+        description: 'Check for column name mismatches'
+        type: boolean
+        default: true
+      check-relationship-conflicts:
+        description: 'Check for property/relationship name conflicts'
+        type: boolean
+        default: true
+      # Dart/Flutter checks
+      dart-max-file-size:
+        description: 'Max Dart file size in KB'
+        type: number
+        default: 18
+      dart-max-loc:
+        description: 'Max lines of code for Dart files'
+        type: number
+        default: 600
+      # Asset checks
+      check-assets:
+        description: 'Check for non-optimized assets'
+        type: boolean
+        default: true
+
+jobs:
+  detect:
+    name: Detect Project Type
+    runs-on: ubuntu-latest
+    outputs:
+      project-type: ${{ steps.detect.outputs.type }}
+      has-vue: ${{ steps.detect.outputs.has_vue }}
+      has-laravel: ${{ steps.detect.outputs.has_laravel }}
+      has-dart: ${{ steps.detect.outputs.has_dart }}
+      has-assets: ${{ steps.detect.outputs.has_assets }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect project type
+        id: detect
+        run: |
+          TYPE="${{ inputs.project-type }}"
+
+          if [ "$TYPE" = "auto" ]; then
+            if [ -f "artisan" ]; then
+              TYPE="laravel"
+            elif [ -f "pubspec.yaml" ]; then
+              if grep -q "flutter:" pubspec.yaml; then
+                TYPE="flutter"
+              else
+                TYPE="dart"
+              fi
+            elif [ -f "package.json" ]; then
+              if grep -q '"vue"' package.json; then
+                TYPE="vue"
+              elif grep -q '"react"' package.json; then
+                TYPE="react"
+              else
+                TYPE="node"
+              fi
+            fi
+          fi
+
+          echo "type=$TYPE" >> $GITHUB_OUTPUT
+
+          # Check what we have
+          [ -d "resources/js" ] && [ -f "package.json" ] && echo "has_vue=true" >> $GITHUB_OUTPUT || echo "has_vue=false" >> $GITHUB_OUTPUT
+          [ -f "artisan" ] && echo "has_laravel=true" >> $GITHUB_OUTPUT || echo "has_laravel=false" >> $GITHUB_OUTPUT
+          [ -f "pubspec.yaml" ] && echo "has_dart=true" >> $GITHUB_OUTPUT || echo "has_dart=false" >> $GITHUB_OUTPUT
+
+          # Check for assets
+          if find . -type f \( -name "*.jpg" -o -name "*.jpeg" -o -name "*.png" -o -name "*.svg" \) 2>/dev/null | head -1 | grep -q .; then
+            echo "has_assets=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_assets=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "📦 Detected project type: $TYPE"
+
+  vue-checks:
+    name: Vue/JS Checks
+    needs: detect
+    if: needs.detect.outputs.has-vue == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Download Vue check scripts
+        run: |
+          mkdir -p scripts
+          REPO_URL="https://raw.githubusercontent.com/banua-coder/banua-coder-workflow/main/scripts/vue"
+
+          # Download scripts if they don't exist locally
+          if [ ! -f "scripts/check-native-inputs.cjs" ]; then
+            curl -sL "$REPO_URL/check-native-inputs.cjs" -o scripts/check-native-inputs.cjs
+          fi
+          if [ ! -f "scripts/check-vue-types.sh" ]; then
+            curl -sL "$REPO_URL/check-vue-types.sh" -o scripts/check-vue-types.sh
+            chmod +x scripts/check-vue-types.sh
+          fi
+
+      - name: Check Vue file LOC
+        run: |
+          MAX_LOC=${{ inputs.vue-max-loc }}
+          FAILED=false
+
+          echo "## Vue File Size Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Lines | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            LOC=$(wc -l < "$file" | tr -d ' ')
+            if [ "$LOC" -gt "$MAX_LOC" ]; then
+              echo "| \`$file\` | $LOC | ❌ Exceeds $MAX_LOC |" >> $GITHUB_STEP_SUMMARY
+              echo "::error file=$file::File has $LOC lines, exceeds maximum of $MAX_LOC"
+              FAILED=true
+            else
+              echo "| \`$file\` | $LOC | ✅ |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done < <(find resources/js -name "*.vue" -type f 2>/dev/null)
+
+          if [ "$FAILED" = "true" ]; then
+            exit 1
+          fi
+
+      - name: Check for native HTML inputs
+        if: inputs.check-native-inputs
+        run: |
+          echo "## Native Input Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          node scripts/check-native-inputs.cjs >> $GITHUB_STEP_SUMMARY 2>&1 || true
+
+      - name: Check for types in Vue files
+        if: inputs.check-vue-types
+        run: |
+          echo "## Vue Type Definition Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          bash scripts/check-vue-types.sh >> $GITHUB_STEP_SUMMARY 2>&1 || true
+
+  laravel-checks:
+    name: Laravel Checks
+    needs: detect
+    if: needs.detect.outputs.has-laravel == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+
+      - name: Download Laravel check scripts
+        run: |
+          mkdir -p scripts
+          REPO_URL="https://raw.githubusercontent.com/banua-coder/banua-coder-workflow/main/scripts/laravel"
+
+          # Download scripts if they don't exist locally
+          if [ ! -f "scripts/check-missing-requests.php" ]; then
+            curl -sL "$REPO_URL/check-missing-requests.php" -o scripts/check-missing-requests.php
+          fi
+          if [ ! -f "scripts/check-column-mismatches.php" ]; then
+            curl -sL "$REPO_URL/check-column-mismatches.php" -o scripts/check-column-mismatches.php
+          fi
+          if [ ! -f "scripts/check-relationship-conflicts.php" ]; then
+            curl -sL "$REPO_URL/check-relationship-conflicts.php" -o scripts/check-relationship-conflicts.php
+          fi
+
+      - name: Check for missing FormRequest classes
+        if: inputs.check-missing-requests
+        run: |
+          echo "## FormRequest Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          php scripts/check-missing-requests.php >> $GITHUB_STEP_SUMMARY 2>&1 || true
+
+      - name: Check for column mismatches
+        if: inputs.check-column-mismatches
+        run: |
+          echo "## Column Mismatch Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          php scripts/check-column-mismatches.php >> $GITHUB_STEP_SUMMARY 2>&1 || true
+
+      - name: Check for relationship conflicts
+        if: inputs.check-relationship-conflicts
+        run: |
+          echo "## Relationship Conflict Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          php scripts/check-relationship-conflicts.php >> $GITHUB_STEP_SUMMARY 2>&1 || true
+
+  dart-checks:
+    name: Dart/Flutter Checks
+    needs: detect
+    if: needs.detect.outputs.has-dart == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check Dart file sizes
+        run: |
+          MAX_SIZE=${{ inputs.dart-max-file-size }}
+          MAX_LOC=${{ inputs.dart-max-loc }}
+          FAILED=false
+
+          echo "## Dart File Size Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Size (KB) | Lines | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-----------|-------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            SIZE_KB=$(du -k "$file" | cut -f1)
+            LOC=$(wc -l < "$file" | tr -d ' ')
+
+            STATUS="✅"
+            if [ "$SIZE_KB" -gt "$MAX_SIZE" ]; then
+              STATUS="❌ Size exceeds ${MAX_SIZE}KB"
+              echo "::error file=$file::File size ${SIZE_KB}KB exceeds maximum of ${MAX_SIZE}KB"
+              FAILED=true
+            elif [ "$LOC" -gt "$MAX_LOC" ]; then
+              STATUS="❌ LOC exceeds $MAX_LOC"
+              echo "::error file=$file::File has $LOC lines, exceeds maximum of $MAX_LOC"
+              FAILED=true
+            fi
+
+            echo "| \`$file\` | $SIZE_KB | $LOC | $STATUS |" >> $GITHUB_STEP_SUMMARY
+          done < <(find lib -name "*.dart" -type f 2>/dev/null)
+
+          if [ "$FAILED" = "true" ]; then
+            exit 1
+          fi
+
+  asset-checks:
+    name: Asset Optimization Check
+    needs: detect
+    if: needs.detect.outputs.has-assets == 'true' && inputs.check-assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get changed assets
+        id: changed-assets
+        uses: tj-actions/changed-files@v45
+        with:
+          files: |
+            **/*.jpg
+            **/*.jpeg
+            **/*.png
+            **/*.svg
+
+      - name: Install optimization tools
+        if: steps.changed-assets.outputs.any_changed == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jpegoptim optipng
+          npm install -g svgo
+
+      - name: Check JPEG optimization
+        if: steps.changed-assets.outputs.any_changed == 'true'
+        run: |
+          echo "## Asset Optimization Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          FAILED=false
+          for file in ${{ steps.changed-assets.outputs.all_changed_files }}; do
+            if [[ "$file" == *.jpg ]] || [[ "$file" == *.jpeg ]]; then
+              # Check if JPEG can be optimized more than 5%
+              BEFORE=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file")
+              jpegoptim --dry-run "$file" 2>&1 | grep -q "optimized" && {
+                echo "⚠️ \`$file\` can be optimized further" >> $GITHUB_STEP_SUMMARY
+                echo "::warning file=$file::JPEG image can be optimized"
+              }
+            fi
+          done
+
+      - name: Check PNG optimization
+        if: steps.changed-assets.outputs.any_changed == 'true'
+        run: |
+          for file in ${{ steps.changed-assets.outputs.all_changed_files }}; do
+            if [[ "$file" == *.png ]]; then
+              # Check with optipng simulation
+              OUTPUT=$(optipng -simulate "$file" 2>&1)
+              if echo "$OUTPUT" | grep -q "decrease"; then
+                echo "⚠️ \`$file\` can be optimized further" >> $GITHUB_STEP_SUMMARY
+                echo "::warning file=$file::PNG image can be optimized"
+              fi
+            fi
+          done
+
+      - name: Check SVG optimization
+        if: steps.changed-assets.outputs.any_changed == 'true'
+        run: |
+          for file in ${{ steps.changed-assets.outputs.all_changed_files }}; do
+            if [[ "$file" == *.svg ]]; then
+              BEFORE=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file")
+              AFTER=$(svgo --dry-run "$file" 2>&1 | grep -oP '\d+(?= bytes)' | tail -1 || echo "$BEFORE")
+              if [ "$AFTER" -lt "$BEFORE" ]; then
+                SAVINGS=$((BEFORE - AFTER))
+                echo "⚠️ \`$file\` can save ${SAVINGS} bytes" >> $GITHUB_STEP_SUMMARY
+                echo "::warning file=$file::SVG can be optimized (save ${SAVINGS} bytes)"
+              fi
+            fi
+          done
+
+      - name: No assets changed
+        if: steps.changed-assets.outputs.any_changed != 'true'
+        run: echo "No asset files changed" >> $GITHUB_STEP_SUMMARY

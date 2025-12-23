@@ -10,6 +10,7 @@ Reusable GitHub Actions workflows for Git Flow release management across multipl
 - 🌐 **Web Deployment** - Deploy to SSH, Vercel, Netlify, Firebase
 - 📱 **Mobile Deployment** - Android and iOS Flutter apps
 - 🔄 **Back-merge** - Automatic PR to sync changes back to develop
+- 🧹 **Sanity Checks** - Code quality checks for Vue, Laravel, Dart/Flutter projects
 
 ## Supported Project Types
 
@@ -121,6 +122,35 @@ Run Laravel/PHP tests with database setup.
 | `build-assets` | Build frontend assets | `true` |
 | `test-command` | Test command to run | `./vendor/bin/pest` |
 | `coverage` | Code coverage: `xdebug`, `pcov`, `none` | `none` |
+
+### `sanity-check.yml`
+
+Customizable code quality and sanity checks for multiple project types.
+
+**Inputs:**
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `project-type` | Project type: `laravel`, `vue`, `react`, `dart`, `flutter`, `auto` | `auto` |
+| `php-version` | PHP version | `8.3` |
+| `node-version` | Node.js version | `20` |
+| `flutter-version` | Flutter version | `3.38.4` |
+| `vue-max-loc` | Max lines of code for Vue files | `700` |
+| `check-native-inputs` | Check for native HTML inputs (should use shadcn/ui) | `true` |
+| `check-vue-types` | Check for type definitions inside .vue files | `true` |
+| `check-missing-requests` | Check for missing FormRequest classes | `true` |
+| `check-column-mismatches` | Check for column name mismatches | `true` |
+| `check-relationship-conflicts` | Check for property/relationship name conflicts | `true` |
+| `dart-max-file-size` | Max Dart file size in KB | `18` |
+| `dart-max-loc` | Max lines of code for Dart files | `600` |
+| `check-assets` | Check for non-optimized assets | `true` |
+
+**Check Categories:**
+
+- **Vue/JS**: File size limits, native input detection, type definitions in .vue files
+- **Laravel**: FormRequest usage, column mismatches, relationship conflicts
+- **Dart/Flutter**: File size and LOC limits
+- **Assets**: Image optimization (JPEG, PNG, SVG)
 
 ### `deploy-on-tag.yml`
 
