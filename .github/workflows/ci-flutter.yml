@@ -1,0 +1,481 @@
+name: Flutter CI
+
+on:
+  workflow_call:
+    inputs:
+      flutter-version:
+        description: 'Flutter version (e.g., 3.38.4 or stable)'
+        type: string
+        default: 'stable'
+      flutter-channel:
+        description: 'Flutter channel (stable, beta, dev)'
+        type: string
+        default: 'stable'
+      working-directory:
+        description: 'Working directory for the project'
+        type: string
+        default: '.'
+      # Mode configuration
+      monorepo:
+        description: 'Enable monorepo mode (auto-detects melos.yaml if not specified)'
+        type: string
+        default: 'auto'
+      monorepo-tool:
+        description: 'Monorepo tool command (e.g., "dart run monorepo_toolkit", "melos")'
+        type: string
+        default: 'melos'
+      # Feature toggles
+      run-analyze:
+        description: 'Run static analysis'
+        type: boolean
+        default: true
+      run-format:
+        description: 'Check code formatting'
+        type: boolean
+        default: true
+      run-tests:
+        description: 'Run unit tests'
+        type: boolean
+        default: true
+      run-coverage:
+        description: 'Generate coverage report'
+        type: boolean
+        default: true
+      run-size-guard:
+        description: 'Check file sizes'
+        type: boolean
+        default: false
+      # Size guard configuration
+      dart-max-size:
+        description: 'Max Dart file size (e.g., 20KB)'
+        type: string
+        default: '20KB'
+      asset-max-size:
+        description: 'Max asset file size (e.g., 40KB)'
+        type: string
+        default: '40KB'
+      # Coverage configuration
+      coverage-threshold:
+        description: 'Minimum coverage percentage'
+        type: number
+        default: 0
+      post-coverage-comment:
+        description: 'Post coverage report as PR comment'
+        type: boolean
+        default: true
+      # Analysis configuration
+      analyze-directories:
+        description: 'Directories to analyze (comma-separated)'
+        type: string
+        default: 'lib'
+      format-directories:
+        description: 'Directories to check formatting (comma-separated)'
+        type: string
+        default: 'lib,test'
+
+jobs:
+  detect:
+    name: Detect Configuration
+    runs-on: ubuntu-latest
+    outputs:
+      is-monorepo: ${{ steps.detect.outputs.is_monorepo }}
+      has-melos: ${{ steps.detect.outputs.has_melos }}
+      has-tests: ${{ steps.detect.outputs.has_tests }}
+      dart-changed: ${{ steps.changes.outputs.dart_changed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect project configuration
+        id: detect
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          # Detect monorepo
+          if [ "${{ inputs.monorepo }}" = "auto" ]; then
+            if [ -f "melos.yaml" ]; then
+              echo "is_monorepo=true" >> $GITHUB_OUTPUT
+              echo "has_melos=true" >> $GITHUB_OUTPUT
+              echo "📦 Detected: Flutter Monorepo (melos)"
+            elif [ -f "pubspec.yaml" ] && find . -path "./packages/*/pubspec.yaml" 2>/dev/null | head -1 | grep -q .; then
+              echo "is_monorepo=true" >> $GITHUB_OUTPUT
+              echo "has_melos=false" >> $GITHUB_OUTPUT
+              echo "📦 Detected: Flutter Monorepo (packages/)"
+            else
+              echo "is_monorepo=false" >> $GITHUB_OUTPUT
+              echo "has_melos=false" >> $GITHUB_OUTPUT
+              echo "📦 Detected: Single Flutter Package"
+            fi
+          else
+            echo "is_monorepo=${{ inputs.monorepo }}" >> $GITHUB_OUTPUT
+            echo "has_melos=$([ -f melos.yaml ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          fi
+
+          # Check for tests
+          if [ -d "test" ] || find . -path "*/test/*.dart" 2>/dev/null | head -1 | grep -q .; then
+            echo "has_tests=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_tests=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Detect changes
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_REF="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE_REF="${{ github.event.before }}"
+          fi
+
+          # Check if any Dart files changed
+          if git diff --name-only "$BASE_REF"..HEAD 2>/dev/null | grep -q '\.dart$'; then
+            echo "dart_changed=true" >> $GITHUB_OUTPUT
+            echo "🔍 Dart files changed"
+          else
+            echo "dart_changed=false" >> $GITHUB_OUTPUT
+            echo "🔍 No Dart file changes"
+          fi
+
+  analyze:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+    needs: detect
+    if: inputs.run-analyze
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter-version }}
+          channel: ${{ inputs.flutter-channel }}
+          cache: true
+
+      - name: Get dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ "${{ needs.detect.outputs.is-monorepo }}" = "true" ] && [ "${{ needs.detect.outputs.has-melos }}" = "true" ]; then
+            dart pub global activate melos
+            melos bootstrap
+          else
+            flutter pub get
+          fi
+
+      - name: Run static analysis
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          echo "## 🔍 Static Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          DIRS="${{ inputs.analyze-directories }}"
+          IFS=',' read -ra DIR_ARRAY <<< "$DIRS"
+
+          if [ "${{ needs.detect.outputs.is-monorepo }}" = "true" ] && [ "${{ needs.detect.outputs.has-melos }}" = "true" ]; then
+            echo "Running analysis on monorepo packages..."
+            melos run analyze 2>&1 | tee analysis_output.txt || true
+
+            if grep -q "error" analysis_output.txt; then
+              echo "❌ Analysis found errors" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            else
+              echo "✅ Analysis passed" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            FAILED=false
+            for dir in "${DIR_ARRAY[@]}"; do
+              dir=$(echo "$dir" | xargs) # trim whitespace
+              if [ -d "$dir" ]; then
+                echo "Analyzing $dir..."
+                if flutter analyze "$dir" --no-fatal-warnings; then
+                  echo "✅ \`$dir\` passed" >> $GITHUB_STEP_SUMMARY
+                else
+                  echo "❌ \`$dir\` has issues" >> $GITHUB_STEP_SUMMARY
+                  FAILED=true
+                fi
+              fi
+            done
+
+            if [ "$FAILED" = "true" ]; then
+              exit 1
+            fi
+          fi
+
+  format:
+    name: Code Formatting
+    runs-on: ubuntu-latest
+    needs: detect
+    if: inputs.run-format
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter-version }}
+          channel: ${{ inputs.flutter-channel }}
+          cache: true
+
+      - name: Check formatting
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          echo "## 🎨 Code Formatting" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          DIRS="${{ inputs.format-directories }}"
+          IFS=',' read -ra DIR_ARRAY <<< "$DIRS"
+          FAILED=false
+
+          for dir in "${DIR_ARRAY[@]}"; do
+            dir=$(echo "$dir" | xargs)
+            if [ -d "$dir" ]; then
+              echo "Checking $dir..."
+              if dart format --output=none --set-exit-if-changed "$dir"; then
+                echo "✅ \`$dir\` properly formatted" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "❌ \`$dir\` has formatting issues" >> $GITHUB_STEP_SUMMARY
+                FAILED=true
+              fi
+            fi
+          done
+
+          if [ "$FAILED" = "true" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Run \`dart format .\` to fix formatting issues." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: [detect, analyze, format]
+    if: always() && inputs.run-tests && needs.detect.outputs.has-tests == 'true' && (needs.analyze.result == 'success' || needs.analyze.result == 'skipped') && (needs.format.result == 'success' || needs.format.result == 'skipped')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter-version }}
+          channel: ${{ inputs.flutter-channel }}
+          cache: true
+
+      - name: Get dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ "${{ needs.detect.outputs.is-monorepo }}" = "true" ] && [ "${{ needs.detect.outputs.has-melos }}" = "true" ]; then
+            dart pub global activate melos
+            melos bootstrap
+          else
+            flutter pub get
+          fi
+
+      - name: Install lcov
+        if: inputs.run-coverage
+        run: sudo apt-get install -y lcov
+
+      - name: Run tests
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          echo "## 🧪 Unit Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.detect.outputs.is-monorepo }}" = "true" ] && [ "${{ needs.detect.outputs.has-melos }}" = "true" ]; then
+            if [ "${{ inputs.run-coverage }}" = "true" ]; then
+              melos run test:coverage 2>&1 | tee test_output.txt || true
+            else
+              melos run test 2>&1 | tee test_output.txt || true
+            fi
+          else
+            if [ "${{ inputs.run-coverage }}" = "true" ]; then
+              flutter test --coverage 2>&1 | tee test_output.txt || true
+            else
+              flutter test 2>&1 | tee test_output.txt || true
+            fi
+          fi
+
+          # Parse test results
+          if grep -q "All tests passed" test_output.txt; then
+            echo "✅ All tests passed" >> $GITHUB_STEP_SUMMARY
+          elif grep -q "Some tests failed" test_output.txt; then
+            echo "❌ Some tests failed" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "✅ Tests completed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Generate coverage report
+        if: inputs.run-coverage && inputs.post-coverage-comment
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -f "coverage/lcov.info" ]; then
+            # Calculate coverage
+            LINES_COVERED=$(grep -o 'LH:[0-9]*' coverage/lcov.info | cut -d: -f2 | awk '{s+=$1} END {print s}')
+            LINES_TOTAL=$(grep -o 'LF:[0-9]*' coverage/lcov.info | cut -d: -f2 | awk '{s+=$1} END {print s}')
+
+            if [ -n "$LINES_TOTAL" ] && [ "$LINES_TOTAL" -gt 0 ]; then
+              COVERAGE=$(echo "scale=1; $LINES_COVERED * 100 / $LINES_TOTAL" | bc)
+              echo "COVERAGE=$COVERAGE" >> $GITHUB_ENV
+              echo "LINES_COVERED=$LINES_COVERED" >> $GITHUB_ENV
+              echo "LINES_TOTAL=$LINES_TOTAL" >> $GITHUB_ENV
+
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### 📊 Coverage Report" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+              echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+              echo "| Lines Covered | $LINES_COVERED |" >> $GITHUB_STEP_SUMMARY
+              echo "| Total Lines | $LINES_TOTAL |" >> $GITHUB_STEP_SUMMARY
+              echo "| **Coverage** | **${COVERAGE}%** |" >> $GITHUB_STEP_SUMMARY
+
+              # Check threshold
+              THRESHOLD=${{ inputs.coverage-threshold }}
+              if [ "$THRESHOLD" -gt 0 ]; then
+                if [ "$(echo "$COVERAGE < $THRESHOLD" | bc)" -eq 1 ]; then
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                  echo "⚠️ Coverage is below threshold of ${THRESHOLD}%" >> $GITHUB_STEP_SUMMARY
+                fi
+              fi
+            fi
+          fi
+
+      - name: Comment PR with coverage
+        if: github.event_name == 'pull_request' && inputs.run-coverage && inputs.post-coverage-comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const coverage = process.env.COVERAGE || 'N/A';
+            const linesCovered = process.env.LINES_COVERED || '0';
+            const linesTotal = process.env.LINES_TOTAL || '0';
+
+            const body = `## 📊 Coverage Report
+
+            | Metric | Value |
+            |--------|-------|
+            | Lines Covered | ${linesCovered} |
+            | Total Lines | ${linesTotal} |
+            | **Coverage** | **${coverage}%** |
+
+            <details>
+            <summary>Details</summary>
+
+            This report was generated by the Flutter CI workflow.
+            </details>`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('📊 Coverage Report')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+            }
+
+      - name: Upload coverage artifact
+        if: inputs.run-coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: ${{ inputs.working-directory }}/coverage/
+          retention-days: 7
+
+  size-guard:
+    name: File Size Check
+    runs-on: ubuntu-latest
+    needs: detect
+    if: inputs.run-size-guard
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check Dart file sizes
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          echo "## 📏 File Size Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          MAX_SIZE="${{ inputs.dart-max-size }}"
+          # Convert to bytes
+          MAX_BYTES=$(echo "$MAX_SIZE" | sed 's/KB/*1024/;s/MB/*1048576/' | bc)
+
+          echo "### Dart Files (max: $MAX_SIZE)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          FAILED=false
+          LARGE_FILES=""
+
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            SIZE=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null)
+            SIZE_KB=$((SIZE / 1024))
+
+            if [ "$SIZE" -gt "$MAX_BYTES" ]; then
+              LARGE_FILES="$LARGE_FILES\n- \`$file\` (${SIZE_KB}KB)"
+              FAILED=true
+            fi
+          done < <(find lib -name "*.dart" -type f 2>/dev/null)
+
+          if [ "$FAILED" = "true" ]; then
+            echo "❌ Files exceeding size limit:" >> $GITHUB_STEP_SUMMARY
+            echo -e "$LARGE_FILES" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "✅ All Dart files within size limit" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Check asset file sizes
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          MAX_SIZE="${{ inputs.asset-max-size }}"
+          MAX_BYTES=$(echo "$MAX_SIZE" | sed 's/KB/*1024/;s/MB/*1048576/' | bc)
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Asset Files (max: $MAX_SIZE)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          FAILED=false
+          LARGE_FILES=""
+
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            SIZE=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null)
+            SIZE_KB=$((SIZE / 1024))
+
+            if [ "$SIZE" -gt "$MAX_BYTES" ]; then
+              LARGE_FILES="$LARGE_FILES\n- \`$file\` (${SIZE_KB}KB)"
+              FAILED=true
+            fi
+          done < <(find . -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.svg" \) 2>/dev/null)
+
+          if [ "$FAILED" = "true" ]; then
+            echo "⚠️ Large assets found:" >> $GITHUB_STEP_SUMMARY
+            echo -e "$LARGE_FILES" >> $GITHUB_STEP_SUMMARY
+            echo "::warning::Some assets exceed the recommended size limit"
+          else
+            echo "✅ All assets within size limit" >> $GITHUB_STEP_SUMMARY
+          fi

@@ -1,0 +1,256 @@
+name: Coverage Report
+
+on:
+  workflow_call:
+    inputs:
+      coverage-file:
+        description: 'Path to coverage file (lcov.info, coverage.xml, etc.)'
+        type: string
+        default: 'coverage/lcov.info'
+      coverage-format:
+        description: 'Coverage format: lcov, cobertura, clover'
+        type: string
+        default: 'lcov'
+      threshold:
+        description: 'Minimum coverage percentage (0 to disable)'
+        type: number
+        default: 0
+      fail-below-threshold:
+        description: 'Fail if coverage is below threshold'
+        type: boolean
+        default: false
+      post-comment:
+        description: 'Post coverage as PR comment'
+        type: boolean
+        default: true
+      upload-artifact:
+        description: 'Upload coverage report as artifact'
+        type: boolean
+        default: true
+      artifact-name:
+        description: 'Name for coverage artifact'
+        type: string
+        default: 'coverage-report'
+      working-directory:
+        description: 'Working directory'
+        type: string
+        default: '.'
+    outputs:
+      coverage:
+        description: 'Coverage percentage'
+        value: ${{ jobs.report.outputs.coverage }}
+      lines-covered:
+        description: 'Number of lines covered'
+        value: ${{ jobs.report.outputs.lines-covered }}
+      lines-total:
+        description: 'Total number of lines'
+        value: ${{ jobs.report.outputs.lines-total }}
+
+jobs:
+  report:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    outputs:
+      coverage: ${{ steps.calculate.outputs.coverage }}
+      lines-covered: ${{ steps.calculate.outputs.lines_covered }}
+      lines-total: ${{ steps.calculate.outputs.lines_total }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check coverage file exists
+        id: check
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -f "${{ inputs.coverage-file }}" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "✅ Coverage file found: ${{ inputs.coverage-file }}"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Coverage file not found: ${{ inputs.coverage-file }}"
+          fi
+
+      - name: Calculate coverage (lcov)
+        id: calculate
+        if: steps.check.outputs.exists == 'true'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          COVERAGE_FILE="${{ inputs.coverage-file }}"
+          FORMAT="${{ inputs.coverage-format }}"
+
+          LINES_COVERED=0
+          LINES_TOTAL=0
+
+          case "$FORMAT" in
+            lcov)
+              # Parse lcov format
+              while IFS= read -r line; do
+                if [[ "$line" == LH:* ]]; then
+                  LINES_COVERED=$((LINES_COVERED + ${line#LH:}))
+                elif [[ "$line" == LF:* ]]; then
+                  LINES_TOTAL=$((LINES_TOTAL + ${line#LF:}))
+                fi
+              done < "$COVERAGE_FILE"
+              ;;
+
+            cobertura)
+              # Parse Cobertura XML
+              if command -v xmllint >/dev/null 2>&1; then
+                LINES_COVERED=$(xmllint --xpath "string(//coverage/@lines-covered)" "$COVERAGE_FILE" 2>/dev/null || echo "0")
+                LINES_TOTAL=$(xmllint --xpath "string(//coverage/@lines-valid)" "$COVERAGE_FILE" 2>/dev/null || echo "0")
+              else
+                # Fallback: grep-based parsing
+                LINES_COVERED=$(grep -oP 'lines-covered="\K[^"]+' "$COVERAGE_FILE" | head -1 || echo "0")
+                LINES_TOTAL=$(grep -oP 'lines-valid="\K[^"]+' "$COVERAGE_FILE" | head -1 || echo "0")
+              fi
+              ;;
+
+            clover)
+              # Parse Clover XML
+              if command -v xmllint >/dev/null 2>&1; then
+                LINES_COVERED=$(xmllint --xpath "string(//metrics/@coveredstatements)" "$COVERAGE_FILE" 2>/dev/null || echo "0")
+                LINES_TOTAL=$(xmllint --xpath "string(//metrics/@statements)" "$COVERAGE_FILE" 2>/dev/null || echo "0")
+              else
+                LINES_COVERED=$(grep -oP 'coveredstatements="\K[^"]+' "$COVERAGE_FILE" | awk '{s+=$1} END {print s}' || echo "0")
+                LINES_TOTAL=$(grep -oP 'statements="\K[^"]+' "$COVERAGE_FILE" | awk '{s+=$1} END {print s}' || echo "0")
+              fi
+              ;;
+          esac
+
+          # Calculate percentage
+          if [ "$LINES_TOTAL" -gt 0 ]; then
+            COVERAGE=$(echo "scale=1; $LINES_COVERED * 100 / $LINES_TOTAL" | bc)
+          else
+            COVERAGE="0"
+          fi
+
+          echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+          echo "lines_covered=$LINES_COVERED" >> $GITHUB_OUTPUT
+          echo "lines_total=$LINES_TOTAL" >> $GITHUB_OUTPUT
+
+          echo "📊 Coverage: ${COVERAGE}% ($LINES_COVERED / $LINES_TOTAL lines)"
+
+          # Write to step summary
+          echo "## 📊 Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lines Covered | $LINES_COVERED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Total Lines | $LINES_TOTAL |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Coverage** | **${COVERAGE}%** |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check threshold
+        if: steps.check.outputs.exists == 'true' && inputs.threshold > 0
+        run: |
+          COVERAGE="${{ steps.calculate.outputs.coverage }}"
+          THRESHOLD="${{ inputs.threshold }}"
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Compare coverage to threshold (bc returns 1 if true, 0 if false)
+          if [ "$(echo "$COVERAGE < $THRESHOLD" | bc)" -eq 1 ]; then
+            echo "⚠️ Coverage (${COVERAGE}%) is below threshold (${THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
+
+            if [ "${{ inputs.fail-below-threshold }}" = "true" ]; then
+              echo "::error::Coverage ${COVERAGE}% is below threshold of ${THRESHOLD}%"
+              exit 1
+            else
+              echo "::warning::Coverage ${COVERAGE}% is below threshold of ${THRESHOLD}%"
+            fi
+          else
+            echo "✅ Coverage meets threshold (${COVERAGE}% >= ${THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Generate badge color
+        id: badge
+        if: steps.check.outputs.exists == 'true'
+        run: |
+          COVERAGE="${{ steps.calculate.outputs.coverage }}"
+
+          # Determine badge color based on coverage
+          if [ "$(echo "$COVERAGE >= 80" | bc)" -eq 1 ]; then
+            COLOR="brightgreen"
+          elif [ "$(echo "$COVERAGE >= 60" | bc)" -eq 1 ]; then
+            COLOR="green"
+          elif [ "$(echo "$COVERAGE >= 40" | bc)" -eq 1 ]; then
+            COLOR="yellow"
+          elif [ "$(echo "$COVERAGE >= 20" | bc)" -eq 1 ]; then
+            COLOR="orange"
+          else
+            COLOR="red"
+          fi
+
+          echo "color=$COLOR" >> $GITHUB_OUTPUT
+
+      - name: Comment PR with coverage
+        if: github.event_name == 'pull_request' && inputs.post-comment && steps.check.outputs.exists == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const coverage = '${{ steps.calculate.outputs.coverage }}';
+            const linesCovered = '${{ steps.calculate.outputs.lines_covered }}';
+            const linesTotal = '${{ steps.calculate.outputs.lines_total }}';
+            const threshold = ${{ inputs.threshold }};
+            const badgeColor = '${{ steps.badge.outputs.color }}';
+
+            let status = '✅';
+            if (threshold > 0 && parseFloat(coverage) < threshold) {
+              status = '⚠️';
+            }
+
+            const body = `## 📊 Coverage Report
+
+            | Metric | Value |
+            |--------|-------|
+            | Lines Covered | ${linesCovered} |
+            | Total Lines | ${linesTotal} |
+            | **Coverage** | **${coverage}%** ${status} |
+
+            ${threshold > 0 ? `\n> Threshold: ${threshold}%` : ''}
+
+            ![Coverage](https://img.shields.io/badge/coverage-${coverage}%25-${badgeColor})
+
+            <details>
+            <summary>What is this?</summary>
+
+            This is an automated coverage report generated by the CI workflow.
+            Coverage measures the percentage of code that is executed by tests.
+            </details>`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('📊 Coverage Report')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+            }
+
+      - name: Upload coverage artifact
+        if: inputs.upload-artifact && steps.check.outputs.exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: |
+            ${{ inputs.working-directory }}/${{ inputs.coverage-file }}
+            ${{ inputs.working-directory }}/coverage/
+          retention-days: 7
+          if-no-files-found: ignore
