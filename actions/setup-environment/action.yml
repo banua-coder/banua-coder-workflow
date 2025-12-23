@@ -1,0 +1,164 @@
+name: 'Setup Environment'
+description: 'Setup development environment based on project type'
+author: 'Banua Coder'
+
+inputs:
+  project-type:
+    description: 'Type of project (web-app, npm-package, dart-package, flutter-package, php-package, mobile-app)'
+    required: false
+    default: 'auto'
+  node-version:
+    description: 'Node.js version'
+    required: false
+    default: '20'
+  php-version:
+    description: 'PHP version'
+    required: false
+    default: '8.2'
+  flutter-version:
+    description: 'Flutter version'
+    required: false
+    default: '3.27.2'
+  java-version:
+    description: 'Java version (for Android)'
+    required: false
+    default: '17'
+
+outputs:
+  project-type:
+    description: 'Detected or specified project type'
+    value: ${{ steps.detect.outputs.project_type }}
+  package-manager:
+    description: 'Detected package manager (npm, pnpm, yarn, composer, pub)'
+    value: ${{ steps.detect.outputs.package_manager }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Detect project type
+      id: detect
+      shell: bash
+      run: |
+        PROJECT_TYPE="${{ inputs.project-type }}"
+
+        if [ "$PROJECT_TYPE" = "auto" ]; then
+          # Auto-detect based on files present
+          if [ -f "pubspec.yaml" ]; then
+            if grep -q "flutter:" pubspec.yaml; then
+              if [ -d "android" ] || [ -d "ios" ]; then
+                PROJECT_TYPE="flutter-app"
+              else
+                PROJECT_TYPE="flutter-package"
+              fi
+            else
+              PROJECT_TYPE="dart-package"
+            fi
+          elif [ -f "package.json" ]; then
+            if jq -e '.private == true' package.json > /dev/null 2>&1; then
+              PROJECT_TYPE="web-app"
+            else
+              PROJECT_TYPE="npm-package"
+            fi
+          elif [ -f "composer.json" ]; then
+            if jq -e '.type == "project"' composer.json > /dev/null 2>&1; then
+              PROJECT_TYPE="php-app"
+            else
+              PROJECT_TYPE="php-package"
+            fi
+          elif [ -d "android" ] && [ -f "android/build.gradle" ]; then
+            PROJECT_TYPE="android-app"
+          elif [ -d "ios" ] && [ -f "ios/Podfile" ]; then
+            PROJECT_TYPE="ios-app"
+          else
+            PROJECT_TYPE="unknown"
+          fi
+        fi
+
+        # Detect package manager
+        PACKAGE_MANAGER=""
+        if [ -f "pnpm-lock.yaml" ]; then
+          PACKAGE_MANAGER="pnpm"
+        elif [ -f "yarn.lock" ]; then
+          PACKAGE_MANAGER="yarn"
+        elif [ -f "package-lock.json" ]; then
+          PACKAGE_MANAGER="npm"
+        elif [ -f "composer.lock" ]; then
+          PACKAGE_MANAGER="composer"
+        elif [ -f "pubspec.lock" ]; then
+          PACKAGE_MANAGER="pub"
+        fi
+
+        echo "project_type=$PROJECT_TYPE" >> $GITHUB_OUTPUT
+        echo "package_manager=$PACKAGE_MANAGER" >> $GITHUB_OUTPUT
+
+        echo "📦 Project type: $PROJECT_TYPE"
+        echo "📦 Package manager: $PACKAGE_MANAGER"
+
+    - name: Setup Node.js
+      if: contains(fromJSON('["web-app", "npm-package"]'), steps.detect.outputs.project_type)
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Setup pnpm
+      if: steps.detect.outputs.package_manager == 'pnpm'
+      uses: pnpm/action-setup@v4
+      with:
+        version: 10
+
+    - name: Setup PHP
+      if: contains(fromJSON('["php-app", "php-package"]'), steps.detect.outputs.project_type)
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: ${{ inputs.php-version }}
+        extensions: mbstring, xml, ctype, iconv, intl, pdo_mysql, dom, filter, gd, json, zip
+        coverage: none
+
+    - name: Setup Flutter
+      if: contains(fromJSON('["flutter-app", "flutter-package"]'), steps.detect.outputs.project_type)
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ inputs.flutter-version }}
+        channel: stable
+        cache: true
+
+    - name: Setup Dart
+      if: steps.detect.outputs.project_type == 'dart-package'
+      uses: dart-lang/setup-dart@v1
+
+    - name: Setup Java (for Android)
+      if: contains(fromJSON('["flutter-app", "android-app"]'), steps.detect.outputs.project_type)
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: ${{ inputs.java-version }}
+
+    - name: Install Node dependencies
+      if: steps.detect.outputs.package_manager == 'pnpm'
+      shell: bash
+      run: pnpm install --frozen-lockfile
+
+    - name: Install Node dependencies (npm)
+      if: steps.detect.outputs.package_manager == 'npm'
+      shell: bash
+      run: npm ci
+
+    - name: Install Node dependencies (yarn)
+      if: steps.detect.outputs.package_manager == 'yarn'
+      shell: bash
+      run: yarn install --frozen-lockfile
+
+    - name: Install PHP dependencies
+      if: steps.detect.outputs.package_manager == 'composer'
+      shell: bash
+      run: composer install --no-interaction --prefer-dist
+
+    - name: Install Dart/Flutter dependencies
+      if: steps.detect.outputs.package_manager == 'pub'
+      shell: bash
+      run: |
+        if command -v flutter &> /dev/null; then
+          flutter pub get
+        else
+          dart pub get
+        fi

@@ -1,0 +1,41 @@
+# Example workflow for Flutter packages (pub.dev)
+# Copy this file to your project's .github/workflows/release.yml
+#
+# IMPORTANT: This workflow uses OIDC authentication for pub.dev publishing.
+# You need to configure a GitHub environment named "pub.dev" in your repository settings.
+# See: https://dart.dev/tools/pub/automated-publishing
+
+name: Release
+
+on:
+  push:
+    branches:
+      - 'release/**'
+      - 'hotfix/**'
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  release:
+    uses: banua-coder/banua-coder-workflow/.github/workflows/release.yml@v1
+    with:
+      project-type: flutter-package
+      main-branch: main
+      develop-branch: develop
+      changelog-format: keepachangelog
+      flutter-version: '3.27.2'
+    secrets: inherit
+
+  # Publish when tag is pushed
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: release
+    permissions:
+      id-token: write # Required for OIDC authentication with pub.dev
+    uses: banua-coder/banua-coder-workflow/.github/workflows/publish-dart.yml@v1
+    with:
+      flutter-version: '3.27.2'
+      use-flutter: true
+      dry-run: false
+      environment: pub.dev

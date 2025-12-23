@@ -1,0 +1,197 @@
+name: Publish Dart/Flutter Package
+
+on:
+  workflow_call:
+    inputs:
+      flutter-version:
+        description: 'Flutter version'
+        type: string
+        default: '3.27.2'
+      use-flutter:
+        description: 'Use Flutter SDK instead of Dart SDK'
+        type: boolean
+        default: true
+      dry-run:
+        description: 'Perform a dry run only (validation without publishing)'
+        type: boolean
+        default: false
+      environment:
+        description: 'GitHub environment for pub.dev OIDC authentication'
+        type: string
+        default: 'pub.dev'
+    outputs:
+      version:
+        description: 'Published version'
+        value: ${{ jobs.validate.outputs.version }}
+      package-name:
+        description: 'Package name'
+        value: ${{ jobs.validate.outputs.package-name }}
+
+jobs:
+  # Validation job - runs for all cases
+  validate:
+    name: Validate Package
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.info.outputs.version }}
+      package-name: ${{ steps.info.outputs.package_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Flutter
+        if: inputs.use-flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter-version }}
+          channel: stable
+          cache: true
+
+      - name: Setup Dart
+        if: '!inputs.use-flutter'
+        uses: dart-lang/setup-dart@v1
+
+      - name: Get package info
+        id: info
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1)
+          PACKAGE_NAME=$(grep '^name:' pubspec.yaml | sed 's/name: //')
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+
+          echo "📦 Package: $PACKAGE_NAME@$VERSION"
+
+      - name: Validate package structure
+        run: |
+          echo "📦 Validating package structure..."
+
+          if [ ! -f "pubspec.yaml" ]; then
+            echo "❌ pubspec.yaml not found"
+            exit 1
+          fi
+
+          if [ ! -f "README.md" ]; then
+            echo "❌ README.md not found"
+            exit 1
+          fi
+
+          if [ ! -f "CHANGELOG.md" ]; then
+            echo "❌ CHANGELOG.md not found"
+            exit 1
+          fi
+
+          if [ ! -f "LICENSE" ]; then
+            echo "❌ LICENSE file not found"
+            exit 1
+          fi
+
+          if [ ! -d "lib" ]; then
+            echo "❌ lib directory not found"
+            exit 1
+          fi
+
+          echo "✅ Package structure validation passed"
+
+      - name: Get dependencies
+        run: |
+          if [ "${{ inputs.use-flutter }}" = "true" ]; then
+            flutter pub get
+          else
+            dart pub get
+          fi
+
+      - name: Analyze
+        run: |
+          echo "🔍 Running static analysis..."
+          if [ "${{ inputs.use-flutter }}" = "true" ]; then
+            flutter analyze lib/
+          else
+            dart analyze lib/
+          fi
+
+      - name: Check formatting
+        run: |
+          echo "🎨 Checking code formatting..."
+          if ! dart format --output=none --set-exit-if-changed lib/; then
+            echo "❌ Code formatting issues found"
+            echo "Run 'dart format lib/' to fix formatting"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: |
+          echo "🧪 Running tests..."
+          if [ -d "test" ] && [ "$(find test -name '*_test.dart' | wc -l)" -gt 0 ]; then
+            if [ "${{ inputs.use-flutter }}" = "true" ]; then
+              flutter test
+            else
+              dart test
+            fi
+          else
+            echo "⚠️ No test files found, skipping tests"
+          fi
+
+      - name: Dry run
+        run: |
+          echo "🔍 Validating package for pub.dev publishing..."
+          if [ "${{ inputs.use-flutter }}" = "true" ]; then
+            flutter pub publish --dry-run
+          else
+            dart pub publish --dry-run
+          fi
+          echo "✅ Package validation successful"
+
+  # Official pub.dev publishing using dart-lang reusable workflow with OIDC
+  publish:
+    name: Publish to pub.dev
+    if: '!inputs.dry-run'
+    needs: validate
+    permissions:
+      id-token: write # Required for OIDC authentication
+    uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
+    with:
+      environment: ${{ inputs.environment }}
+
+  # Summary job
+  summary:
+    if: always()
+    needs: [validate, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create publication summary
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          PACKAGE_NAME="${{ needs.validate.outputs.package-name }}"
+          DRY_RUN="${{ inputs.dry-run }}"
+
+          VALIDATE_STATUS="${{ needs.validate.result }}"
+          PUBLISH_STATUS="${{ needs.publish.result }}"
+
+          echo "## 📦 Publication Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Package**: $PACKAGE_NAME" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: $VERSION" >> $GITHUB_STEP_SUMMARY
+          echo "**Flutter SDK**: ${{ inputs.flutter-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 📊 Job Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Validation | $( [ "$VALIDATE_STATUS" = "success" ] && echo "✅ Passed" || echo "❌ Failed" ) |" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "| pub.dev Publish | ⏭️ Skipped (dry run) |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| pub.dev Publish | $( [ "$PUBLISH_STATUS" = "success" ] && echo "✅ Published" || echo "❌ Failed" ) |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Links" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$DRY_RUN" != "true" ] && [ "$PUBLISH_STATUS" = "success" ]; then
+            echo "- [pub.dev Package](https://pub.dev/packages/$PACKAGE_NAME)" >> $GITHUB_STEP_SUMMARY
+            echo "- [API Documentation](https://pub.dev/documentation/$PACKAGE_NAME/latest/)" >> $GITHUB_STEP_SUMMARY
+          fi

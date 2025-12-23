@@ -1,0 +1,140 @@
+name: 'Bump Version'
+description: 'Bump version in project files (package.json, pubspec.yaml, composer.json, etc.)'
+author: 'Banua Coder'
+
+inputs:
+  version:
+    description: 'The version to set (e.g., 1.2.3)'
+    required: true
+  bump-type:
+    description: 'Type of version bump (major, minor, patch) - used if version not specified'
+    required: false
+    default: ''
+  files:
+    description: 'Comma-separated list of files to update (auto-detected if not specified)'
+    required: false
+    default: ''
+  commit:
+    description: 'Whether to commit the changes'
+    required: false
+    default: 'false'
+  commit-message:
+    description: 'Commit message template (use {version} placeholder)'
+    required: false
+    default: 'chore: bump version to {version}'
+
+outputs:
+  version:
+    description: 'The new version'
+    value: ${{ steps.bump.outputs.version }}
+  previous-version:
+    description: 'The previous version'
+    value: ${{ steps.bump.outputs.previous_version }}
+  files-updated:
+    description: 'List of files that were updated'
+    value: ${{ steps.bump.outputs.files_updated }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Detect and bump version
+      id: bump
+      shell: bash
+      run: |
+        VERSION="${{ inputs.version }}"
+        FILES="${{ inputs.files }}"
+        PREVIOUS_VERSION=""
+        FILES_UPDATED=""
+
+        # Auto-detect version files if not specified
+        if [ -z "$FILES" ]; then
+          FILES=""
+          [ -f "package.json" ] && FILES="$FILES,package.json"
+          [ -f "pubspec.yaml" ] && FILES="$FILES,pubspec.yaml"
+          [ -f "composer.json" ] && FILES="$FILES,composer.json"
+          [ -f "version.txt" ] && FILES="$FILES,version.txt"
+          [ -f "gradle.properties" ] && FILES="$FILES,gradle.properties"
+          FILES="${FILES#,}"  # Remove leading comma
+        fi
+
+        echo "Detected files: $FILES"
+
+        # Process each file
+        IFS=',' read -ra FILE_ARRAY <<< "$FILES"
+        for file in "${FILE_ARRAY[@]}"; do
+          file=$(echo "$file" | xargs)  # Trim whitespace
+          if [ ! -f "$file" ]; then
+            echo "Warning: $file not found, skipping"
+            continue
+          fi
+
+          echo "Processing $file..."
+
+          case "$file" in
+            package.json)
+              PREVIOUS_VERSION=$(jq -r '.version // empty' "$file")
+              jq --arg v "$VERSION" '.version = $v' "$file" > tmp.json && mv tmp.json "$file"
+              FILES_UPDATED="$FILES_UPDATED,$file"
+              ;;
+            pubspec.yaml)
+              PREVIOUS_VERSION=$(grep '^version:' "$file" | sed 's/version: //' | cut -d'+' -f1)
+              # Preserve build number if exists
+              if grep -q '+' <<< "$(grep '^version:' "$file")"; then
+                BUILD_NUM=$(grep '^version:' "$file" | sed 's/.*+//')
+                sed -i.bak "s/^version: .*/version: $VERSION+$BUILD_NUM/" "$file"
+              else
+                sed -i.bak "s/^version: .*/version: $VERSION/" "$file"
+              fi
+              rm -f "$file.bak"
+              FILES_UPDATED="$FILES_UPDATED,$file"
+              ;;
+            composer.json)
+              PREVIOUS_VERSION=$(jq -r '.version // empty' "$file")
+              if [ -n "$PREVIOUS_VERSION" ]; then
+                jq --arg v "$VERSION" '.version = $v' "$file" > tmp.json && mv tmp.json "$file"
+                FILES_UPDATED="$FILES_UPDATED,$file"
+              fi
+              ;;
+            version.txt)
+              PREVIOUS_VERSION=$(cat "$file" | tr -d '[:space:]')
+              echo "$VERSION" > "$file"
+              FILES_UPDATED="$FILES_UPDATED,$file"
+              ;;
+            gradle.properties)
+              PREVIOUS_VERSION=$(grep '^VERSION_NAME=' "$file" | cut -d'=' -f2)
+              sed -i.bak "s/^VERSION_NAME=.*/VERSION_NAME=$VERSION/" "$file"
+              rm -f "$file.bak"
+              FILES_UPDATED="$FILES_UPDATED,$file"
+              ;;
+            *.json)
+              # Generic JSON with version field
+              if jq -e '.version' "$file" > /dev/null 2>&1; then
+                PREVIOUS_VERSION=$(jq -r '.version' "$file")
+                jq --arg v "$VERSION" '.version = $v' "$file" > tmp.json && mv tmp.json "$file"
+                FILES_UPDATED="$FILES_UPDATED,$file"
+              fi
+              ;;
+          esac
+        done
+
+        FILES_UPDATED="${FILES_UPDATED#,}"  # Remove leading comma
+
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "previous_version=$PREVIOUS_VERSION" >> $GITHUB_OUTPUT
+        echo "files_updated=$FILES_UPDATED" >> $GITHUB_OUTPUT
+
+        echo "✅ Version bumped from $PREVIOUS_VERSION to $VERSION"
+        echo "📁 Files updated: $FILES_UPDATED"
+
+    - name: Commit changes
+      if: inputs.commit == 'true'
+      shell: bash
+      run: |
+        VERSION="${{ steps.bump.outputs.version }}"
+        MESSAGE="${{ inputs.commit-message }}"
+        MESSAGE="${MESSAGE//\{version\}/$VERSION}"
+
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add -A
+        git commit -m "$MESSAGE" || echo "No changes to commit"

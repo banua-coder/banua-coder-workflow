@@ -1,0 +1,348 @@
+name: Release Workflow
+
+on:
+  workflow_call:
+    inputs:
+      project-type:
+        description: 'Project type (web-app, npm-package, dart-package, flutter-package, php-package, mobile-app, auto)'
+        type: string
+        default: 'auto'
+      main-branch:
+        description: 'Main branch name'
+        type: string
+        default: 'main'
+      develop-branch:
+        description: 'Develop branch name'
+        type: string
+        default: 'develop'
+      changelog-format:
+        description: 'Changelog format (keepachangelog, conventional, simple)'
+        type: string
+        default: 'keepachangelog'
+      auto-merge-backport:
+        description: 'Auto-merge back-merge PR if no conflicts'
+        type: boolean
+        default: false
+      node-version:
+        description: 'Node.js version'
+        type: string
+        default: '20'
+      php-version:
+        description: 'PHP version'
+        type: string
+        default: '8.3'
+      flutter-version:
+        description: 'Flutter version'
+        type: string
+        default: '3.38.4'
+    secrets:
+      GH_PAT:
+        description: 'GitHub Personal Access Token (for creating PRs and pushing)'
+        required: false
+
+jobs:
+  # ============================================
+  # JOB 1: On Release/Hotfix Branch Created
+  # ============================================
+  on-branch-created:
+    name: Setup Release Branch
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/hotfix/'))
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract-version.outputs.version }}
+      branch-type: ${{ steps.extract-version.outputs.branch_type }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from branch name
+        id: extract-version
+        run: |
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          echo "Branch: $BRANCH_NAME"
+
+          if [[ "$BRANCH_NAME" == release/* ]]; then
+            VERSION="${BRANCH_NAME#release/}"
+            BRANCH_TYPE="release"
+          elif [[ "$BRANCH_NAME" == hotfix/* ]]; then
+            VERSION="${BRANCH_NAME#hotfix/}"
+            BRANCH_TYPE="hotfix"
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "branch_type=$BRANCH_TYPE" >> $GITHUB_OUTPUT
+          echo "📦 Version: $VERSION ($BRANCH_TYPE)"
+
+      - name: Setup environment
+        uses: banua-coder/banua-coder-workflow/actions/setup-environment@main
+        with:
+          project-type: ${{ inputs.project-type }}
+          node-version: ${{ inputs.node-version }}
+          php-version: ${{ inputs.php-version }}
+          flutter-version: ${{ inputs.flutter-version }}
+
+      - name: Validate and update version
+        uses: banua-coder/banua-coder-workflow/actions/bump-version@main
+        with:
+          version: ${{ steps.extract-version.outputs.version }}
+          commit: 'true'
+          commit-message: 'chore: bump version to {version}'
+
+      - name: Push version update
+        run: |
+          git push origin HEAD
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Create PR to main
+        run: |
+          VERSION="${{ steps.extract-version.outputs.version }}"
+          BRANCH_TYPE="${{ steps.extract-version.outputs.branch_type }}"
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+
+          # Check if PR already exists
+          EXISTING_PR=$(gh pr list --head "$BRANCH_NAME" --base "${{ inputs.main-branch }}" --json number --jq '.[0].number')
+
+          if [ -z "$EXISTING_PR" ]; then
+            gh pr create \
+              --base "${{ inputs.main-branch }}" \
+              --head "$BRANCH_NAME" \
+              --title "$BRANCH_TYPE: $VERSION" \
+              --body "## $BRANCH_TYPE $VERSION
+
+            This PR contains the changes for version \`$VERSION\`.
+
+            ### Checklist
+            - [ ] All tests passing
+            - [ ] FCT completed
+            - [ ] Ready for release
+
+            ---
+            🤖 *This PR was automatically created by the release workflow.*"
+            echo "✅ Created PR to ${{ inputs.main-branch }}"
+          else
+            echo "PR #$EXISTING_PR already exists"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+  # ============================================
+  # JOB 2: Create bump-next-version PR (Release only)
+  # ============================================
+  bump-next-version:
+    name: Bump Next Version
+    needs: on-branch-created
+    if: needs.on-branch-created.outputs.branch-type == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.develop-branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Calculate next version
+        id: next-version
+        run: |
+          CURRENT="${{ needs.on-branch-created.outputs.version }}"
+
+          # Parse version
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          # Bump minor version
+          NEXT_MINOR=$((MINOR + 1))
+          NEXT_VERSION="$MAJOR.$NEXT_MINOR.0"
+
+          echo "next_version=$NEXT_VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Next version: $NEXT_VERSION"
+
+      - name: Create bump branch
+        run: |
+          BRANCH_NAME="chore/bump-next-version"
+          git checkout -b "$BRANCH_NAME"
+
+      - name: Setup environment
+        uses: banua-coder/banua-coder-workflow/actions/setup-environment@main
+        with:
+          project-type: ${{ inputs.project-type }}
+
+      - name: Bump version
+        uses: banua-coder/banua-coder-workflow/actions/bump-version@main
+        with:
+          version: ${{ steps.next-version.outputs.next_version }}
+          commit: 'true'
+          commit-message: 'chore: bump version to {version} for next development cycle'
+
+      - name: Push and create PR
+        run: |
+          NEXT_VERSION="${{ steps.next-version.outputs.next_version }}"
+          BRANCH_NAME="chore/bump-next-version"
+
+          git push origin "$BRANCH_NAME" --force
+
+          # Check if PR exists
+          EXISTING_PR=$(gh pr list --head "$BRANCH_NAME" --base "${{ inputs.develop-branch }}" --json number --jq '.[0].number')
+
+          if [ -z "$EXISTING_PR" ]; then
+            gh pr create \
+              --base "${{ inputs.develop-branch }}" \
+              --head "$BRANCH_NAME" \
+              --title "chore: bump version to $NEXT_VERSION" \
+              --body "## Bump Next Development Version
+
+            Bumps version to \`$NEXT_VERSION\` for the next development cycle.
+
+            ---
+            🤖 *This PR was automatically created by the release workflow.*"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+  # ============================================
+  # JOB 3: On PR Merged to Main
+  # ============================================
+  on-merged:
+    name: Process Release
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      (startsWith(github.event.pull_request.head.ref, 'release/') || startsWith(github.event.pull_request.head.ref, 'hotfix/'))
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract-version.outputs.version }}
+      tag: ${{ steps.create-tag.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Extract version
+        id: extract-version
+        run: |
+          BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
+          if [[ "$BRANCH_NAME" == release/* ]]; then
+            VERSION="${BRANCH_NAME#release/}"
+          elif [[ "$BRANCH_NAME" == hotfix/* ]]; then
+            VERSION="${BRANCH_NAME#hotfix/}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Version: $VERSION"
+
+      - name: Setup environment
+        uses: banua-coder/banua-coder-workflow/actions/setup-environment@main
+        with:
+          project-type: ${{ inputs.project-type }}
+
+      # For packages: Generate changelog BEFORE tagging
+      - name: Generate changelog (pre-tag for packages)
+        if: contains(fromJSON('["npm-package", "dart-package", "flutter-package", "php-package"]'), inputs.project-type)
+        uses: banua-coder/banua-coder-workflow/actions/changelog@main
+        with:
+          version: ${{ steps.extract-version.outputs.version }}
+          format: ${{ inputs.changelog-format }}
+          commit: 'true'
+
+      - name: Push changelog (packages)
+        if: contains(fromJSON('["npm-package", "dart-package", "flutter-package", "php-package"]'), inputs.project-type)
+        run: git push origin HEAD
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Create and push tag
+        id: create-tag
+        run: |
+          VERSION="${{ steps.extract-version.outputs.version }}"
+          TAG="$VERSION"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git tag -a "$TAG" -m "Release $VERSION"
+          git push origin "$TAG"
+
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "🏷️ Created tag: $TAG"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+  # ============================================
+  # JOB 4: Post-Deploy Tasks (triggered by tag)
+  # ============================================
+  post-deploy:
+    name: Post-Deploy Tasks
+    needs: on-merged
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.main-branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      # For web apps: Generate changelog AFTER tagging
+      - name: Generate changelog (post-tag for web apps)
+        id: changelog
+        if: contains(fromJSON('["web-app", "mobile-app", "auto"]'), inputs.project-type)
+        uses: banua-coder/banua-coder-workflow/actions/changelog@main
+        with:
+          version: ${{ needs.on-merged.outputs.version }}
+          format: ${{ inputs.changelog-format }}
+          commit: 'true'
+
+      - name: Push changelog (web apps)
+        if: contains(fromJSON('["web-app", "mobile-app", "auto"]'), inputs.project-type)
+        run: git push origin HEAD
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Create back-merge PR
+        uses: banua-coder/banua-coder-workflow/actions/back-merge@main
+        with:
+          version: ${{ needs.on-merged.outputs.version }}
+          base-branch: ${{ inputs.develop-branch }}
+          source-branch: ${{ inputs.main-branch }}
+          github-token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          auto-merge: ${{ inputs.auto-merge-backport }}
+          conflict-resolution: 'theirs'
+
+      - name: Get changelog for release
+        id: get-changelog
+        run: |
+          VERSION="${{ needs.on-merged.outputs.version }}"
+
+          # Extract this version's changelog
+          if [ -f "CHANGELOG.md" ]; then
+            # Get content between this version and the next version header
+            NOTES=$(sed -n "/## \[$VERSION\]/,/## \[/p" CHANGELOG.md | sed '$d')
+            if [ -z "$NOTES" ]; then
+              NOTES=$(sed -n "/## $VERSION/,/## /p" CHANGELOG.md | sed '$d')
+            fi
+          fi
+
+          if [ -z "$NOTES" ]; then
+            NOTES="Release $VERSION"
+          fi
+
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        run: |
+          VERSION="${{ needs.on-merged.outputs.version }}"
+          TAG="${{ needs.on-merged.outputs.tag }}"
+
+          gh release create "$TAG" \
+            --title "Release $VERSION" \
+            --notes "${{ steps.get-changelog.outputs.notes }}" \
+            --latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}

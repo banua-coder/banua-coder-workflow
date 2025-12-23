@@ -1,0 +1,91 @@
+# Example workflow for Laravel applications
+# Copy this file to your project's .github/workflows/release.yml
+
+name: Release
+
+on:
+  push:
+    branches:
+      - 'release/**'
+      - 'hotfix/**'
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  release:
+    uses: banua-coder/banua-coder-workflow/.github/workflows/release.yml@v1
+    with:
+      project-type: web-app
+      main-branch: main
+      develop-branch: develop
+      changelog-format: keepachangelog
+      auto-merge-backport: false
+      node-version: '20'
+      php-version: '8.2'
+    secrets: inherit
+
+  # Deploy when tag is pushed
+  deploy:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: release
+    uses: banua-coder/banua-coder-workflow/.github/workflows/deploy-on-tag.yml@v1
+    with:
+      environment: production
+      deploy-provider: ssh
+      deploy-path: /var/www/your-app
+    secrets: inherit
+
+  # Optional: Run tests before deployment
+  test:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: release
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: testing
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo_mysql, dom, filter, json
+          coverage: none
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build assets
+        run: npm run build
+
+      - name: Setup environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+          php artisan config:clear
+
+      - name: Run tests
+        run: php artisan test
+        env:
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: testing
+          DB_USERNAME: root
+          DB_PASSWORD: password

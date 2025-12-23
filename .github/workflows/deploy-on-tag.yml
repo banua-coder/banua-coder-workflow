@@ -1,0 +1,197 @@
+name: Deploy on Tag
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        type: string
+        default: 'production'
+      deploy-provider:
+        description: 'Deployment provider (ssh, vercel, netlify, firebase, custom)'
+        type: string
+        default: 'ssh'
+      build-command:
+        description: 'Build command'
+        type: string
+        default: ''
+      deploy-path:
+        description: 'Remote deployment path (for SSH)'
+        type: string
+        default: ''
+      node-version:
+        description: 'Node.js version'
+        type: string
+        default: '20'
+      php-version:
+        description: 'PHP version'
+        type: string
+        default: '8.2'
+    secrets:
+      SSH_HOST:
+        description: 'SSH host'
+        required: false
+      SSH_USER:
+        description: 'SSH username'
+        required: false
+      SSH_KEY:
+        description: 'SSH private key'
+        required: false
+      SSH_PORT:
+        description: 'SSH port'
+        required: false
+      VERCEL_TOKEN:
+        description: 'Vercel token'
+        required: false
+      VERCEL_ORG_ID:
+        description: 'Vercel org ID'
+        required: false
+      VERCEL_PROJECT_ID:
+        description: 'Vercel project ID'
+        required: false
+      NETLIFY_AUTH_TOKEN:
+        description: 'Netlify auth token'
+        required: false
+      NETLIFY_SITE_ID:
+        description: 'Netlify site ID'
+        required: false
+      FIREBASE_TOKEN:
+        description: 'Firebase token'
+        required: false
+    outputs:
+      deploy-url:
+        description: 'Deployment URL'
+        value: ${{ jobs.deploy.outputs.deploy-url }}
+      status:
+        description: 'Deployment status'
+        value: ${{ jobs.deploy.outputs.status }}
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      deploy-url: ${{ steps.deploy.outputs.url }}
+      status: ${{ steps.deploy.outputs.status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        uses: banua-coder/banua-coder-workflow/actions/setup-environment@main
+        with:
+          node-version: ${{ inputs.node-version }}
+          php-version: ${{ inputs.php-version }}
+
+      - name: Build (custom command)
+        if: inputs.build-command != ''
+        run: ${{ inputs.build-command }}
+
+      - name: Build (auto-detect)
+        if: inputs.build-command == ''
+        run: |
+          if [ -f "package.json" ]; then
+            if [ -f "pnpm-lock.yaml" ]; then
+              pnpm run build || npm run build
+            elif [ -f "yarn.lock" ]; then
+              yarn build || npm run build
+            else
+              npm run build
+            fi
+          fi
+
+      # SSH Deployment
+      - name: Deploy via SSH
+        if: inputs.deploy-provider == 'ssh'
+        id: ssh-deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            cd ${{ inputs.deploy-path }}
+            git fetch origin
+            git checkout ${{ github.ref_name }}
+            git pull origin ${{ github.ref_name }}
+
+            # Install dependencies
+            if [ -f "composer.json" ]; then
+              composer install --no-dev --optimize-autoloader
+            fi
+            if [ -f "package.json" ]; then
+              if [ -f "pnpm-lock.yaml" ]; then
+                pnpm install --frozen-lockfile
+                pnpm run build
+              elif [ -f "yarn.lock" ]; then
+                yarn install --frozen-lockfile
+                yarn build
+              else
+                npm ci
+                npm run build
+              fi
+            fi
+
+            # Laravel specific
+            if [ -f "artisan" ]; then
+              php artisan migrate --force
+              php artisan config:cache
+              php artisan route:cache
+              php artisan view:cache
+              php artisan optimize
+            fi
+
+      # Vercel Deployment
+      - name: Deploy to Vercel
+        if: inputs.deploy-provider == 'vercel'
+        id: vercel-deploy
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prod'
+
+      # Netlify Deployment
+      - name: Deploy to Netlify
+        if: inputs.deploy-provider == 'netlify'
+        id: netlify-deploy
+        uses: nwtgck/actions-netlify@v2.1
+        with:
+          publish-dir: './dist'
+          production-deploy: true
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+
+      # Firebase Deployment
+      - name: Deploy to Firebase
+        if: inputs.deploy-provider == 'firebase'
+        id: firebase-deploy
+        uses: w9jds/firebase-action@v13.5.2
+        with:
+          args: deploy --only hosting
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+
+      - name: Set outputs
+        id: deploy
+        run: |
+          PROVIDER="${{ inputs.deploy-provider }}"
+
+          case "$PROVIDER" in
+            vercel)
+              echo "url=${{ steps.vercel-deploy.outputs.preview-url }}" >> $GITHUB_OUTPUT
+              ;;
+            netlify)
+              echo "url=${{ steps.netlify-deploy.outputs.deploy-url }}" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "url=" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "✅ Deployment completed"

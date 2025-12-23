@@ -1,0 +1,35 @@
+# Example workflow for npm packages
+# Copy this file to your project's .github/workflows/release.yml
+
+name: Release
+
+on:
+  push:
+    branches:
+      - 'release/**'
+      - 'hotfix/**'
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  release:
+    uses: banua-coder/banua-coder-workflow/.github/workflows/release.yml@v1
+    with:
+      project-type: npm-package
+      main-branch: main
+      develop-branch: develop
+      changelog-format: keepachangelog
+      node-version: '20'
+    secrets: inherit
+
+  # Publish when tag is pushed
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: release
+    uses: banua-coder/banua-coder-workflow/.github/workflows/publish-npm.yml@v1
+    with:
+      node-version: '20'
+      access: public
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,0 +1,95 @@
+name: Publish npm Package
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: 'Node.js version'
+        type: string
+        default: '20'
+      registry:
+        description: 'npm registry URL'
+        type: string
+        default: 'https://registry.npmjs.org'
+      access:
+        description: 'Package access level (public, restricted)'
+        type: string
+        default: 'public'
+      dry-run:
+        description: 'Perform a dry run'
+        type: boolean
+        default: false
+    secrets:
+      NPM_TOKEN:
+        description: 'npm authentication token'
+        required: true
+    outputs:
+      version:
+        description: 'Published version'
+        value: ${{ jobs.publish.outputs.version }}
+      package-name:
+        description: 'Package name'
+        value: ${{ jobs.publish.outputs.package-name }}
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.publish.outputs.version }}
+      package-name: ${{ steps.publish.outputs.package_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: ${{ inputs.registry }}
+
+      - name: Setup pnpm
+        if: hashFiles('pnpm-lock.yaml') != ''
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: |
+          if [ -f "pnpm-lock.yaml" ]; then
+            pnpm install --frozen-lockfile
+          elif [ -f "yarn.lock" ]; then
+            yarn install --frozen-lockfile
+          else
+            npm ci
+          fi
+
+      - name: Build
+        run: |
+          if [ -f "pnpm-lock.yaml" ]; then
+            pnpm run build || true
+          elif [ -f "yarn.lock" ]; then
+            yarn build || true
+          else
+            npm run build || true
+          fi
+
+      - name: Publish
+        id: publish
+        run: |
+          VERSION=$(jq -r '.version' package.json)
+          PACKAGE_NAME=$(jq -r '.name' package.json)
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+
+          if [ "${{ inputs.dry-run }}" = "true" ]; then
+            echo "🔍 Dry run - would publish $PACKAGE_NAME@$VERSION"
+            npm publish --access ${{ inputs.access }} --dry-run
+          else
+            echo "📦 Publishing $PACKAGE_NAME@$VERSION"
+            npm publish --access ${{ inputs.access }}
+            echo "✅ Published $PACKAGE_NAME@$VERSION"
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

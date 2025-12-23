@@ -1,0 +1,68 @@
+name: Publish PHP Package
+
+on:
+  workflow_call:
+    inputs:
+      php-version:
+        description: 'PHP version'
+        type: string
+        default: '8.2'
+    outputs:
+      version:
+        description: 'Published version'
+        value: ${{ jobs.publish.outputs.version }}
+      package-name:
+        description: 'Package name'
+        value: ${{ jobs.publish.outputs.package-name }}
+
+jobs:
+  publish:
+    name: Publish to Packagist
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.info.outputs.version }}
+      package-name: ${{ steps.info.outputs.package_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          extensions: mbstring, xml, ctype, iconv, intl, dom, filter, json
+          coverage: none
+
+      - name: Get package info
+        id: info
+        run: |
+          if [ -f "composer.json" ]; then
+            VERSION=$(jq -r '.version // empty' composer.json)
+            if [ -z "$VERSION" ]; then
+              VERSION="${GITHUB_REF#refs/tags/}"
+            fi
+            PACKAGE_NAME=$(jq -r '.name' composer.json)
+
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+
+            echo "📦 Package: $PACKAGE_NAME@$VERSION"
+          fi
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Run tests
+        run: |
+          if [ -f "phpunit.xml" ] || [ -f "phpunit.xml.dist" ]; then
+            vendor/bin/phpunit
+          elif [ -f "vendor/bin/pest" ]; then
+            vendor/bin/pest
+          fi
+
+      - name: Notify Packagist
+        run: |
+          echo "ℹ️ Packagist automatically detects new releases via GitHub webhook."
+          echo "📦 Make sure your package is registered on packagist.org"
+          echo "🔗 Visit: https://packagist.org/packages/${{ steps.info.outputs.package_name }}"
+          echo "✅ Tag ${{ github.ref_name }} will be picked up automatically"

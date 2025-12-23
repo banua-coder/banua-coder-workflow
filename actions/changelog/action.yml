@@ -1,0 +1,170 @@
+name: 'Generate Changelog'
+description: 'Generate changelog from git history using conventional commits'
+author: 'Banua Coder'
+
+inputs:
+  version:
+    description: 'The version for this release'
+    required: true
+  format:
+    description: 'Changelog format (keepachangelog, conventional, simple)'
+    required: false
+    default: 'keepachangelog'
+  output-file:
+    description: 'Output file path'
+    required: false
+    default: 'CHANGELOG.md'
+  include-body:
+    description: 'Include commit body in changelog'
+    required: false
+    default: 'false'
+  commit:
+    description: 'Whether to commit the changelog'
+    required: false
+    default: 'false'
+
+outputs:
+  changelog:
+    description: 'The generated changelog content'
+    value: ${{ steps.generate.outputs.changelog }}
+  release-notes:
+    description: 'Release notes (changelog for this version only)'
+    value: ${{ steps.generate.outputs.release_notes }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Get previous tag
+      id: prev-tag
+      shell: bash
+      run: |
+        PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        echo "tag=$PREV_TAG" >> $GITHUB_OUTPUT
+        if [ -z "$PREV_TAG" ]; then
+          echo "No previous tag found, will include all commits"
+        else
+          echo "Previous tag: $PREV_TAG"
+        fi
+
+    - name: Generate changelog
+      id: generate
+      shell: bash
+      run: |
+        VERSION="${{ inputs.version }}"
+        FORMAT="${{ inputs.format }}"
+        OUTPUT_FILE="${{ inputs.output-file }}"
+        PREV_TAG="${{ steps.prev-tag.outputs.tag }}"
+        DATE=$(date +%Y-%m-%d)
+
+        # Get commits since last tag (or all commits if no tag)
+        if [ -z "$PREV_TAG" ]; then
+          COMMITS=$(git log --pretty=format:"%s|%h|%an" --reverse)
+        else
+          COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"%s|%h|%an" --reverse)
+        fi
+
+        # Initialize categories
+        FEAT=""
+        FIX=""
+        DOCS=""
+        STYLE=""
+        REFACTOR=""
+        PERF=""
+        TEST=""
+        BUILD=""
+        CI=""
+        CHORE=""
+        BREAKING=""
+        OTHER=""
+
+        # Parse commits into categories
+        while IFS= read -r line; do
+          [ -z "$line" ] && continue
+
+          MSG=$(echo "$line" | cut -d'|' -f1)
+          HASH=$(echo "$line" | cut -d'|' -f2)
+          AUTHOR=$(echo "$line" | cut -d'|' -f3)
+
+          # Check for breaking changes
+          if [[ "$MSG" == *"!"* ]] || [[ "$MSG" == *"BREAKING"* ]]; then
+            BREAKING="$BREAKING\n- $MSG ($HASH)"
+            continue
+          fi
+
+          # Categorize by conventional commit type
+          case "$MSG" in
+            feat:*|feat\(*) FEAT="$FEAT\n- ${MSG#feat:} ($HASH)" ;;
+            fix:*|fix\(*) FIX="$FIX\n- ${MSG#fix:} ($HASH)" ;;
+            docs:*|docs\(*) DOCS="$DOCS\n- ${MSG#docs:} ($HASH)" ;;
+            style:*|style\(*) STYLE="$STYLE\n- ${MSG#style:} ($HASH)" ;;
+            refactor:*|refactor\(*) REFACTOR="$REFACTOR\n- ${MSG#refactor:} ($HASH)" ;;
+            perf:*|perf\(*) PERF="$PERF\n- ${MSG#perf:} ($HASH)" ;;
+            test:*|test\(*) TEST="$TEST\n- ${MSG#test:} ($HASH)" ;;
+            build:*|build\(*) BUILD="$BUILD\n- ${MSG#build:} ($HASH)" ;;
+            ci:*|ci\(*) CI="$CI\n- ${MSG#ci:} ($HASH)" ;;
+            chore:*|chore\(*) CHORE="$CHORE\n- ${MSG#chore:} ($HASH)" ;;
+            *) OTHER="$OTHER\n- $MSG ($HASH)" ;;
+          esac
+        done <<< "$COMMITS"
+
+        # Build release notes
+        RELEASE_NOTES=""
+
+        if [ "$FORMAT" = "keepachangelog" ]; then
+          RELEASE_NOTES="## [$VERSION] - $DATE\n"
+        else
+          RELEASE_NOTES="## $VERSION ($DATE)\n"
+        fi
+
+        [ -n "$BREAKING" ] && RELEASE_NOTES="$RELEASE_NOTES\n### ⚠️ BREAKING CHANGES\n$BREAKING\n"
+        [ -n "$FEAT" ] && RELEASE_NOTES="$RELEASE_NOTES\n### ✨ Features\n$FEAT\n"
+        [ -n "$FIX" ] && RELEASE_NOTES="$RELEASE_NOTES\n### 🐛 Bug Fixes\n$FIX\n"
+        [ -n "$PERF" ] && RELEASE_NOTES="$RELEASE_NOTES\n### ⚡ Performance\n$PERF\n"
+        [ -n "$REFACTOR" ] && RELEASE_NOTES="$RELEASE_NOTES\n### ♻️ Refactoring\n$REFACTOR\n"
+        [ -n "$DOCS" ] && RELEASE_NOTES="$RELEASE_NOTES\n### 📚 Documentation\n$DOCS\n"
+        [ -n "$TEST" ] && RELEASE_NOTES="$RELEASE_NOTES\n### 🧪 Tests\n$TEST\n"
+        [ -n "$BUILD" ] && RELEASE_NOTES="$RELEASE_NOTES\n### 🏗️ Build\n$BUILD\n"
+        [ -n "$CI" ] && RELEASE_NOTES="$RELEASE_NOTES\n### 👷 CI\n$CI\n"
+        [ -n "$CHORE" ] && RELEASE_NOTES="$RELEASE_NOTES\n### 🔧 Chores\n$CHORE\n"
+        [ -n "$OTHER" ] && RELEASE_NOTES="$RELEASE_NOTES\n### 📝 Other Changes\n$OTHER\n"
+
+        # Save release notes to file for output
+        echo -e "$RELEASE_NOTES" > /tmp/release_notes.md
+
+        # Update or create CHANGELOG.md
+        if [ -f "$OUTPUT_FILE" ]; then
+          # Insert new version after header
+          if grep -q "# Changelog" "$OUTPUT_FILE"; then
+            # File has header, insert after it
+            sed -i.bak '/# Changelog/r /tmp/release_notes.md' "$OUTPUT_FILE"
+            rm -f "$OUTPUT_FILE.bak"
+          else
+            # No header, prepend
+            echo -e "# Changelog\n\nAll notable changes to this project will be documented in this file.\n\n$(cat /tmp/release_notes.md)\n$(cat $OUTPUT_FILE)" > "$OUTPUT_FILE"
+          fi
+        else
+          # Create new changelog
+          echo -e "# Changelog\n\nAll notable changes to this project will be documented in this file.\n\n$RELEASE_NOTES" > "$OUTPUT_FILE"
+        fi
+
+        # Set outputs (escape newlines for GitHub Actions)
+        RELEASE_NOTES_ESCAPED=$(echo -e "$RELEASE_NOTES" | sed ':a;N;$!ba;s/\n/%0A/g')
+        echo "release_notes<<EOF" >> $GITHUB_OUTPUT
+        echo -e "$RELEASE_NOTES" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+        echo "changelog=$OUTPUT_FILE" >> $GITHUB_OUTPUT
+
+        echo "✅ Changelog generated for version $VERSION"
+
+    - name: Commit changelog
+      if: inputs.commit == 'true'
+      shell: bash
+      run: |
+        VERSION="${{ inputs.version }}"
+        OUTPUT_FILE="${{ inputs.output-file }}"
+
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add "$OUTPUT_FILE"
+        git commit -m "docs: update changelog for $VERSION" || echo "No changes to commit"
