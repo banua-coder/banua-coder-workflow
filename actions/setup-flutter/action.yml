@@ -1,0 +1,97 @@
+name: Setup Flutter
+description: Sets up Flutter SDK with caching for efficient CI runs
+
+inputs:
+  flutter-version:
+    description: 'Flutter version (e.g., 3.38.4)'
+    required: false
+    default: ''
+  flutter-channel:
+    description: 'Flutter channel (stable, beta, dev)'
+    required: false
+    default: 'stable'
+  working-directory:
+    description: 'Working directory for pub get'
+    required: false
+    default: '.'
+  cache:
+    description: 'Enable caching'
+    required: false
+    default: 'true'
+  run-pub-get:
+    description: 'Run pub get after setup'
+    required: false
+    default: 'true'
+  melos-bootstrap:
+    description: 'Run melos bootstrap for monorepos'
+    required: false
+    default: 'auto'
+
+outputs:
+  flutter-version:
+    description: 'The installed Flutter version'
+    value: ${{ steps.flutter-version.outputs.version }}
+  cache-hit:
+    description: 'Whether the cache was hit'
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Flutter SDK
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ inputs.flutter-version }}
+        channel: ${{ inputs.flutter-channel }}
+        cache: ${{ inputs.cache }}
+
+    - name: Get Flutter version
+      id: flutter-version
+      shell: bash
+      run: |
+        VERSION=$(flutter --version --machine | grep -o '"frameworkVersion":"[^"]*' | cut -d'"' -f4)
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "📱 Flutter version: $VERSION"
+
+    - name: Cache pub dependencies
+      id: cache
+      if: inputs.cache == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.pub-cache
+          ${{ inputs.working-directory }}/.dart_tool
+        key: pub-cache-${{ runner.os }}-${{ steps.flutter-version.outputs.version }}-${{ hashFiles('**/pubspec.yaml', '**/pubspec.lock') }}
+        restore-keys: |
+          pub-cache-${{ runner.os }}-${{ steps.flutter-version.outputs.version }}-
+          pub-cache-${{ runner.os }}-
+
+    - name: Detect monorepo
+      id: detect
+      if: inputs.run-pub-get == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        if [ -f "melos.yaml" ]; then
+          echo "is_monorepo=true" >> $GITHUB_OUTPUT
+          echo "📦 Detected: Flutter Monorepo (melos)"
+        else
+          echo "is_monorepo=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Install melos
+      if: inputs.run-pub-get == 'true' && steps.detect.outputs.is_monorepo == 'true' && (inputs.melos-bootstrap == 'true' || inputs.melos-bootstrap == 'auto')
+      shell: bash
+      run: dart pub global activate melos
+
+    - name: Bootstrap monorepo
+      if: inputs.run-pub-get == 'true' && steps.detect.outputs.is_monorepo == 'true' && (inputs.melos-bootstrap == 'true' || inputs.melos-bootstrap == 'auto')
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: melos bootstrap
+
+    - name: Get dependencies
+      if: inputs.run-pub-get == 'true' && steps.detect.outputs.is_monorepo != 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: flutter pub get

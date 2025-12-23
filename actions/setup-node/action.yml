@@ -1,0 +1,169 @@
+name: Setup Node
+description: Sets up Node.js environment with package manager and caching
+
+inputs:
+  node-version:
+    description: 'Node.js version'
+    required: false
+    default: '20'
+  package-manager:
+    description: 'Package manager (npm, pnpm, yarn, auto)'
+    required: false
+    default: 'auto'
+  pnpm-version:
+    description: 'pnpm version (if using pnpm)'
+    required: false
+    default: '9'
+  working-directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+  cache:
+    description: 'Enable caching'
+    required: false
+    default: 'true'
+  run-install:
+    description: 'Run install after setup'
+    required: false
+    default: 'true'
+  frozen-lockfile:
+    description: 'Use frozen lockfile'
+    required: false
+    default: 'true'
+
+outputs:
+  node-version:
+    description: 'The installed Node.js version'
+    value: ${{ steps.node-version.outputs.version }}
+  package-manager:
+    description: 'The detected/used package manager'
+    value: ${{ steps.detect-pm.outputs.manager }}
+  cache-hit:
+    description: 'Whether the cache was hit'
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Detect package manager
+      id: detect-pm
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        PM="${{ inputs.package-manager }}"
+
+        if [ "$PM" = "auto" ]; then
+          if [ -f "pnpm-lock.yaml" ]; then
+            PM="pnpm"
+          elif [ -f "yarn.lock" ]; then
+            PM="yarn"
+          elif [ -f "bun.lockb" ]; then
+            PM="bun"
+          else
+            PM="npm"
+          fi
+        fi
+
+        echo "manager=$PM" >> $GITHUB_OUTPUT
+        echo "📦 Package manager: $PM"
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Get Node.js version
+      id: node-version
+      shell: bash
+      run: |
+        VERSION=$(node --version | sed 's/^v//')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "🟢 Node.js version: $VERSION"
+
+    - name: Setup pnpm
+      if: steps.detect-pm.outputs.manager == 'pnpm'
+      uses: pnpm/action-setup@v4
+      with:
+        version: ${{ inputs.pnpm-version }}
+
+    - name: Get pnpm store directory
+      if: steps.detect-pm.outputs.manager == 'pnpm' && inputs.cache == 'true'
+      id: pnpm-cache-dir
+      shell: bash
+      run: echo "dir=$(pnpm store path)" >> $GITHUB_OUTPUT
+
+    - name: Cache pnpm dependencies
+      if: steps.detect-pm.outputs.manager == 'pnpm' && inputs.cache == 'true'
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.pnpm-cache-dir.outputs.dir }}
+        key: pnpm-${{ runner.os }}-${{ steps.node-version.outputs.version }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+        restore-keys: |
+          pnpm-${{ runner.os }}-${{ steps.node-version.outputs.version }}-
+          pnpm-${{ runner.os }}-
+
+    - name: Get npm cache directory
+      if: steps.detect-pm.outputs.manager == 'npm' && inputs.cache == 'true'
+      id: npm-cache-dir
+      shell: bash
+      run: echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT
+
+    - name: Cache npm dependencies
+      if: steps.detect-pm.outputs.manager == 'npm' && inputs.cache == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.npm-cache-dir.outputs.dir }}
+        key: npm-${{ runner.os }}-${{ steps.node-version.outputs.version }}-${{ hashFiles('**/package-lock.json') }}
+        restore-keys: |
+          npm-${{ runner.os }}-${{ steps.node-version.outputs.version }}-
+          npm-${{ runner.os }}-
+
+    - name: Get yarn cache directory
+      if: steps.detect-pm.outputs.manager == 'yarn' && inputs.cache == 'true'
+      id: yarn-cache-dir
+      shell: bash
+      run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
+
+    - name: Cache yarn dependencies
+      if: steps.detect-pm.outputs.manager == 'yarn' && inputs.cache == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.yarn-cache-dir.outputs.dir }}
+        key: yarn-${{ runner.os }}-${{ steps.node-version.outputs.version }}-${{ hashFiles('**/yarn.lock') }}
+        restore-keys: |
+          yarn-${{ runner.os }}-${{ steps.node-version.outputs.version }}-
+          yarn-${{ runner.os }}-
+
+    - name: Install dependencies (pnpm)
+      if: inputs.run-install == 'true' && steps.detect-pm.outputs.manager == 'pnpm'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        if [ "${{ inputs.frozen-lockfile }}" = "true" ]; then
+          pnpm install --frozen-lockfile
+        else
+          pnpm install
+        fi
+
+    - name: Install dependencies (npm)
+      if: inputs.run-install == 'true' && steps.detect-pm.outputs.manager == 'npm'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        if [ "${{ inputs.frozen-lockfile }}" = "true" ]; then
+          npm ci
+        else
+          npm install
+        fi
+
+    - name: Install dependencies (yarn)
+      if: inputs.run-install == 'true' && steps.detect-pm.outputs.manager == 'yarn'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        if [ "${{ inputs.frozen-lockfile }}" = "true" ]; then
+          yarn install --frozen-lockfile
+        else
+          yarn install
+        fi
