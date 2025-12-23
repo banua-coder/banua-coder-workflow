@@ -49,6 +49,7 @@ runs:
         # Auto-detect version files if not specified
         if [ -z "$FILES" ]; then
           FILES=""
+          [ -f "config/app.php" ] && FILES="$FILES,config/app.php"
           [ -f "package.json" ] && FILES="$FILES,package.json"
           [ -f "pubspec.yaml" ] && FILES="$FILES,pubspec.yaml"
           [ -f "composer.json" ] && FILES="$FILES,composer.json"
@@ -71,6 +72,13 @@ runs:
           echo "Processing $file..."
 
           case "$file" in
+            config/app.php)
+              # Laravel config/app.php
+              PREVIOUS_VERSION=$(grep "'version'" "$file" | sed "s/.*'version'.*'=>.*'\([^']*\)'.*/\1/")
+              sed -i.bak "s/'version'.*=>.*'[^']*'/'version' => '$VERSION'/" "$file"
+              rm -f "$file.bak"
+              FILES_UPDATED="$FILES_UPDATED,$file"
+              ;;
             package.json)
               PREVIOUS_VERSION=$(jq -r '.version // empty' "$file")
               jq --arg v "$VERSION" '.version = $v' "$file" > tmp.json && mv tmp.json "$file"
