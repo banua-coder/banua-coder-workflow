@@ -318,7 +318,6 @@ jobs:
           source-branch: ${{ inputs.main-branch }}
           github-token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
           auto-merge: ${{ inputs.auto-merge-backport }}
-          conflict-resolution: 'theirs'
 
       - name: Get changelog for release
         id: get-changelog

@@ -38,7 +38,12 @@ runs:
       id: prev-tag
       shell: bash
       run: |
-        PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        VERSION="${{ inputs.version }}"
+
+        # Get all tags sorted by version, find the one BEFORE current version
+        # This handles the case where we're generating changelog for a tag that already exists
+        PREV_TAG=$(git tag --sort=-version:refname | grep -v "^v\?$VERSION$" | head -n1 || echo "")
+
         echo "tag=$PREV_TAG" >> $GITHUB_OUTPUT
         if [ -z "$PREV_TAG" ]; then
           echo "No previous tag found, will include all commits"

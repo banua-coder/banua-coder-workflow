@@ -22,9 +22,9 @@ inputs:
     required: false
     default: 'false'
   conflict-resolution:
-    description: 'How to resolve version conflicts (theirs, ours, manual)'
+    description: 'How to resolve version conflicts (ours=keep develop version, theirs=use main version, manual)'
     required: false
-    default: 'theirs'
+    default: 'ours'
 
 outputs:
   pr-number:
@@ -92,7 +92,7 @@ runs:
         BASE="${{ inputs.base-branch }}"
 
         # Common version files
-        VERSION_FILES="package.json pubspec.yaml composer.json version.txt gradle.properties"
+        VERSION_FILES="config/app.php package.json pubspec.yaml composer.json version.txt gradle.properties"
 
         git fetch origin "$BASE"
 
