@@ -76,6 +76,7 @@ Main release workflow that handles the entire release process.
 | `changelog-format` | Changelog format: `keepachangelog`, `conventional`, `simple` | `keepachangelog` |
 | `auto-merge-backport` | Auto-merge back-merge PR | `false` |
 | `node-version` | Node.js version | `20` |
+| `pnpm-version` | pnpm version (empty = use packageManager from package.json) | `` |
 | `php-version` | PHP version | `8.2` |
 | `flutter-version` | Flutter version | `3.27.2` |
 
