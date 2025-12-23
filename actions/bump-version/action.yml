@@ -49,10 +49,20 @@ runs:
         # Auto-detect version files if not specified
         if [ -z "$FILES" ]; then
           FILES=""
-          [ -f "config/app.php" ] && FILES="$FILES,config/app.php"
-          [ -f "package.json" ] && FILES="$FILES,package.json"
+          IS_PHP_PROJECT=false
+
+          # Check if it's a PHP/Laravel project
+          if [ -f "config/app.php" ] || ([ -f "composer.json" ] && jq -e '.type == "project"' composer.json > /dev/null 2>&1); then
+            IS_PHP_PROJECT=true
+            [ -f "config/app.php" ] && FILES="$FILES,config/app.php"
+          fi
+
+          # Only add package.json if NOT a PHP project
+          if [ "$IS_PHP_PROJECT" = false ] && [ -f "package.json" ]; then
+            FILES="$FILES,package.json"
+          fi
+
           [ -f "pubspec.yaml" ] && FILES="$FILES,pubspec.yaml"
-          [ -f "composer.json" ] && FILES="$FILES,composer.json"
           [ -f "version.txt" ] && FILES="$FILES,version.txt"
           [ -f "gradle.properties" ] && FILES="$FILES,gradle.properties"
           FILES="${FILES#,}"  # Remove leading comma
@@ -73,9 +83,19 @@ runs:
 
           case "$file" in
             config/app.php)
-              # Laravel config/app.php
-              PREVIOUS_VERSION=$(grep "'version'" "$file" | sed "s/.*'version'.*'=>.*'\([^']*\)'.*/\1/")
-              sed -i.bak "s/'version'.*=>.*'[^']*'/'version' => '$VERSION'/" "$file"
+              # Laravel config/app.php - handles both direct values and env() patterns
+              # Pattern 1: 'version' => env('APP_VERSION', 'x.x.x')
+              # Pattern 2: 'version' => 'x.x.x'
+              if grep -q "env('APP_VERSION'" "$file"; then
+                # Extract previous version from env() default value
+                PREVIOUS_VERSION=$(grep "'version'" "$file" | sed "s/.*env('APP_VERSION',[[:space:]]*'\([^']*\)').*/\1/")
+                # Only replace the default value inside env()
+                sed -i.bak "s/env('APP_VERSION',[[:space:]]*'[^']*')/env('APP_VERSION', '$VERSION')/" "$file"
+              else
+                # Direct value pattern
+                PREVIOUS_VERSION=$(grep "'version'" "$file" | sed "s/.*'version'[[:space:]]*=>[[:space:]]*'\([^']*\)'.*/\1/")
+                sed -i.bak "s/'version'[[:space:]]*=>[[:space:]]*'[^']*'/'version' => '$VERSION'/" "$file"
+              fi
               rm -f "$file.bak"
               FILES_UPDATED="$FILES_UPDATED,$file"
               ;;
