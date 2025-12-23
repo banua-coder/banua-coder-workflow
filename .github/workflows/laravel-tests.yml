@@ -1,0 +1,161 @@
+name: Laravel Tests
+
+on:
+  workflow_call:
+    inputs:
+      php-version:
+        description: 'PHP version'
+        type: string
+        default: '8.3'
+      node-version:
+        description: 'Node.js version'
+        type: string
+        default: '20'
+      pnpm-version:
+        description: 'pnpm version (empty = use packageManager from package.json)'
+        type: string
+        default: ''
+      database:
+        description: 'Database type (sqlite, mysql, pgsql)'
+        type: string
+        default: 'sqlite'
+      run-migrations:
+        description: 'Run database migrations'
+        type: boolean
+        default: true
+      run-seeders:
+        description: 'Run database seeders'
+        type: boolean
+        default: true
+      build-assets:
+        description: 'Build frontend assets'
+        type: boolean
+        default: true
+      test-command:
+        description: 'Test command to run'
+        type: string
+        default: './vendor/bin/pest'
+      coverage:
+        description: 'Enable code coverage (xdebug, pcov, none)'
+        type: string
+        default: 'none'
+
+jobs:
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          tools: composer:v2
+          coverage: ${{ inputs.coverage }}
+          extensions: mbstring, xml, ctype, json, bcmath, pdo_sqlite, pdo_mysql, pdo_pgsql
+
+      - name: Setup Node.js
+        if: inputs.build-assets
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Setup pnpm (with version)
+        if: inputs.build-assets && inputs.pnpm-version != ''
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup pnpm (from packageManager)
+        if: inputs.build-assets && inputs.pnpm-version == ''
+        uses: pnpm/action-setup@v4
+
+      - name: Get pnpm store directory
+        if: inputs.build-assets
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Setup pnpm cache
+        if: inputs.build-assets
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-composer-
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Install Node dependencies
+        if: inputs.build-assets
+        run: |
+          if [ -f "pnpm-lock.yaml" ]; then
+            pnpm install --frozen-lockfile
+          elif [ -f "package-lock.json" ]; then
+            npm ci
+          elif [ -f "yarn.lock" ]; then
+            yarn install --frozen-lockfile
+          fi
+
+      - name: Copy environment file
+        run: cp .env.example .env
+
+      - name: Generate application key
+        run: php artisan key:generate
+
+      - name: Setup SQLite database
+        if: inputs.database == 'sqlite'
+        run: |
+          touch database/database.sqlite
+          # Create additional SQLite databases if configured
+          if grep -q "DB_FLAGS_DATABASE" .env.example; then
+            touch database/flags.sqlite
+          fi
+
+      - name: Run migrations
+        if: inputs.run-migrations
+        run: php artisan migrate --force
+
+      - name: Run seeders
+        if: inputs.run-seeders
+        run: php artisan db:seed --force
+
+      - name: Build assets
+        if: inputs.build-assets
+        run: |
+          if [ -f "pnpm-lock.yaml" ]; then
+            pnpm run build
+          elif [ -f "package-lock.json" ]; then
+            npm run build
+          elif [ -f "yarn.lock" ]; then
+            yarn build
+          fi
+
+      - name: Start dev server
+        run: php artisan serve --port=8000 &
+        env:
+          APP_URL: http://127.0.0.1:8000
+
+      - name: Wait for server
+        run: |
+          timeout 30 bash -c 'until curl -s http://127.0.0.1:8000 > /dev/null 2>&1; do sleep 1; done'
+
+      - name: Run tests
+        run: ${{ inputs.test-command }}
+        env:
+          APP_URL: http://127.0.0.1:8000

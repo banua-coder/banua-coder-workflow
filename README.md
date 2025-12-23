@@ -80,6 +80,48 @@ Main release workflow that handles the entire release process.
 | `php-version` | PHP version | `8.2` |
 | `flutter-version` | Flutter version | `3.27.2` |
 
+### `housekeeping.yml`
+
+Automatically delete merged branches (except protected ones).
+
+**Inputs:**
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `protected-branches` | Comma-separated list of protected branches | `main,master,develop` |
+
+### `lint.yml`
+
+Run code linting (PHP with Pint, frontend with ESLint/Prettier).
+
+**Inputs:**
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `php-version` | PHP version | `8.3` |
+| `node-version` | Node.js version | `20` |
+| `pnpm-version` | pnpm version (empty = use packageManager) | `` |
+| `lint-php` | Run PHP linting | `true` |
+| `lint-frontend` | Run frontend linting | `true` |
+
+### `laravel-tests.yml`
+
+Run Laravel/PHP tests with database setup.
+
+**Inputs:**
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `php-version` | PHP version | `8.3` |
+| `node-version` | Node.js version | `20` |
+| `pnpm-version` | pnpm version (empty = use packageManager) | `` |
+| `database` | Database type: `sqlite`, `mysql`, `pgsql` | `sqlite` |
+| `run-migrations` | Run database migrations | `true` |
+| `run-seeders` | Run database seeders | `true` |
+| `build-assets` | Build frontend assets | `true` |
+| `test-command` | Test command to run | `./vendor/bin/pest` |
+| `coverage` | Code coverage: `xdebug`, `pcov`, `none` | `none` |
+
 ### `deploy-on-tag.yml`
 
 Deploy when a tag is pushed.

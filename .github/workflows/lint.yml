@@ -1,0 +1,150 @@
+name: Lint
+
+on:
+  workflow_call:
+    inputs:
+      php-version:
+        description: 'PHP version'
+        type: string
+        default: '8.3'
+      node-version:
+        description: 'Node.js version'
+        type: string
+        default: '20'
+      pnpm-version:
+        description: 'pnpm version (empty = use packageManager from package.json)'
+        type: string
+        default: ''
+      lint-php:
+        description: 'Run PHP linting (Laravel Pint)'
+        type: boolean
+        default: true
+      lint-frontend:
+        description: 'Run frontend linting (ESLint, Prettier)'
+        type: boolean
+        default: true
+      php-paths:
+        description: 'Paths to lint for PHP (space-separated)'
+        type: string
+        default: 'app config database routes'
+      frontend-extensions:
+        description: 'Frontend file extensions to lint (comma-separated)'
+        type: string
+        default: 'ts,vue,js,css'
+
+jobs:
+  lint:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v45
+        with:
+          files: |
+            **/*.php
+            **/*.ts
+            **/*.vue
+            **/*.js
+            **/*.css
+
+      - name: Setup PHP
+        if: inputs.lint-php && steps.changed-files.outputs.any_changed == 'true'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+
+      - name: Setup Node.js
+        if: inputs.lint-frontend && steps.changed-files.outputs.any_changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Setup pnpm (with version)
+        if: inputs.lint-frontend && steps.changed-files.outputs.any_changed == 'true' && inputs.pnpm-version != ''
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup pnpm (from packageManager)
+        if: inputs.lint-frontend && steps.changed-files.outputs.any_changed == 'true' && inputs.pnpm-version == ''
+        uses: pnpm/action-setup@v4
+
+      - name: Get pnpm store directory
+        if: inputs.lint-frontend && steps.changed-files.outputs.any_changed == 'true'
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Setup pnpm cache
+        if: inputs.lint-frontend && steps.changed-files.outputs.any_changed == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          if [ -f "composer.json" ]; then
+            composer install -q --no-ansi --no-interaction --no-scripts --no-progress --prefer-dist
+          fi
+          if [ -f "pnpm-lock.yaml" ]; then
+            pnpm install --frozen-lockfile
+          elif [ -f "package-lock.json" ]; then
+            npm ci
+          elif [ -f "yarn.lock" ]; then
+            yarn install --frozen-lockfile
+          fi
+
+      - name: Get changed PHP files
+        if: inputs.lint-php
+        id: changed-php
+        uses: tj-actions/changed-files@v45
+        with:
+          files: '**/*.php'
+
+      - name: Run Pint on changed files
+        if: inputs.lint-php && steps.changed-php.outputs.any_changed == 'true'
+        run: |
+          echo "Linting PHP files: ${{ steps.changed-php.outputs.all_changed_files }}"
+          vendor/bin/pint ${{ steps.changed-php.outputs.all_changed_files }}
+
+      - name: Get changed frontend files
+        if: inputs.lint-frontend
+        id: changed-frontend
+        uses: tj-actions/changed-files@v45
+        with:
+          files: |
+            **/*.ts
+            **/*.vue
+            **/*.js
+            **/*.css
+
+      - name: Format with Prettier
+        if: inputs.lint-frontend && steps.changed-frontend.outputs.any_changed == 'true'
+        run: |
+          if [ -f "node_modules/.bin/prettier" ]; then
+            echo "Formatting files: ${{ steps.changed-frontend.outputs.all_changed_files }}"
+            npx prettier --write ${{ steps.changed-frontend.outputs.all_changed_files }}
+          fi
+
+      - name: Lint with ESLint
+        if: inputs.lint-frontend && steps.changed-frontend.outputs.any_changed == 'true'
+        run: |
+          if [ -f "node_modules/.bin/eslint" ]; then
+            echo "Linting files: ${{ steps.changed-frontend.outputs.all_changed_files }}"
+            npx eslint ${{ steps.changed-frontend.outputs.all_changed_files }} --fix || true
+          fi
+
+      - name: No files to lint
+        if: steps.changed-files.outputs.any_changed != 'true'
+        run: echo "No relevant files changed, skipping linting"

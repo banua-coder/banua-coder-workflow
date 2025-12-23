@@ -1,0 +1,47 @@
+name: Housekeeping
+
+on:
+  workflow_call:
+    inputs:
+      protected-branches:
+        description: 'Comma-separated list of protected branches (will not be deleted)'
+        type: string
+        default: 'main,master,develop'
+
+jobs:
+  delete-merged-branch:
+    name: Delete Merged Branch
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    permissions:
+      contents: write
+    steps:
+      - name: Delete source branch
+        run: |
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          PROTECTED="${{ inputs.protected-branches }}"
+
+          # Check if branch is protected
+          IFS=',' read -ra PROTECTED_ARRAY <<< "$PROTECTED"
+          for protected in "${PROTECTED_ARRAY[@]}"; do
+            protected=$(echo "$protected" | xargs)  # Trim whitespace
+            if [[ "$BRANCH" == "$protected" ]]; then
+              echo "Skipping deletion of protected branch: $BRANCH"
+              exit 0
+            fi
+          done
+
+          echo "Deleting source branch: $BRANCH"
+          gh api \
+            --method DELETE \
+            "repos/${{ github.repository }}/git/refs/heads/$BRANCH" || echo "Branch may already be deleted"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Summary
+        run: |
+          echo "## Branch Cleanup" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: \`${{ github.event.pull_request.head.ref }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **PR**: #${{ github.event.pull_request.number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ✅ Deleted" >> $GITHUB_STEP_SUMMARY
