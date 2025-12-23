@@ -1,0 +1,223 @@
+# Node.js CI Template for GitLab
+# Include this in your .gitlab-ci.yml:
+#   include:
+#     - remote: 'https://raw.githubusercontent.com/banua-coder/banua-coder-workflow/main/.gitlab/ci/node.gitlab-ci.yml'
+#
+# Variables you can override:
+#   NODE_VERSION: Node.js version (default: 20)
+#   WORKING_DIRECTORY: Working directory (default: .)
+#   PACKAGE_MANAGER: Package manager - npm, pnpm, yarn, auto (default: auto)
+#   RUN_LINT: Run linting (default: "true")
+#   RUN_TYPECHECK: Run type checking (default: "true")
+#   RUN_TESTS: Run tests (default: "true")
+#   RUN_COVERAGE: Generate coverage (default: "true")
+#   COVERAGE_THRESHOLD: Minimum coverage % (default: 0)
+#   RUN_BUILD: Build project (default: "true")
+
+variables:
+  NODE_VERSION: "20"
+  WORKING_DIRECTORY: "."
+  PACKAGE_MANAGER: "auto"
+  RUN_LINT: "true"
+  RUN_TYPECHECK: "true"
+  RUN_TESTS: "true"
+  RUN_COVERAGE: "true"
+  COVERAGE_THRESHOLD: "0"
+  RUN_BUILD: "true"
+
+.node_base:
+  image: node:${NODE_VERSION}
+  before_script:
+    - cd "$WORKING_DIRECTORY"
+    - |
+      # Detect package manager
+      PM="$PACKAGE_MANAGER"
+      if [ "$PM" = "auto" ]; then
+        if [ -f "pnpm-lock.yaml" ]; then
+          PM="pnpm"
+        elif [ -f "yarn.lock" ]; then
+          PM="yarn"
+        elif [ -f "bun.lockb" ]; then
+          PM="bun"
+        else
+          PM="npm"
+        fi
+      fi
+      echo "Using package manager: $PM"
+      echo "PM=$PM" >> install.env
+
+      # Install package manager if needed
+      case "$PM" in
+        pnpm)
+          npm install -g pnpm
+          pnpm install --frozen-lockfile
+          ;;
+        yarn)
+          yarn install --frozen-lockfile
+          ;;
+        bun)
+          curl -fsSL https://bun.sh/install | bash
+          export PATH="$HOME/.bun/bin:$PATH"
+          bun install --frozen-lockfile
+          ;;
+        *)
+          npm ci
+          ;;
+      esac
+  cache:
+    key: node-${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+      - .pnpm-store/
+
+.node_lint:
+  extends: .node_base
+  stage: test
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - source install.env
+    - |
+      case "$PM" in
+        pnpm) pnpm run lint ;;
+        yarn) yarn lint ;;
+        *) npm run lint ;;
+      esac
+  rules:
+    - if: $RUN_LINT == "true"
+
+.node_typecheck:
+  extends: .node_base
+  stage: test
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - source install.env
+    - |
+      # Check if TypeScript is configured
+      if [ -f "tsconfig.json" ]; then
+        case "$PM" in
+          pnpm) pnpm run typecheck || pnpm exec tsc --noEmit ;;
+          yarn) yarn typecheck || yarn tsc --noEmit ;;
+          *) npm run typecheck || npx tsc --noEmit ;;
+        esac
+      else
+        echo "No tsconfig.json found, skipping typecheck"
+      fi
+  rules:
+    - if: $RUN_TYPECHECK == "true"
+
+.node_test:
+  extends: .node_base
+  stage: test
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - source install.env
+    - |
+      if [ "$RUN_COVERAGE" = "true" ]; then
+        case "$PM" in
+          pnpm) pnpm run test:coverage || pnpm run test -- --coverage ;;
+          yarn) yarn test:coverage || yarn test --coverage ;;
+          *) npm run test:coverage || npm test -- --coverage ;;
+        esac
+      else
+        case "$PM" in
+          pnpm) pnpm run test ;;
+          yarn) yarn test ;;
+          *) npm test ;;
+        esac
+      fi
+    - |
+      # Check coverage threshold
+      if [ "$RUN_COVERAGE" = "true" ] && [ -f "coverage/lcov.info" ]; then
+        LINES_COVERED=0
+        LINES_TOTAL=0
+        while IFS= read -r line; do
+          if [[ "$line" == LH:* ]]; then
+            LINES_COVERED=$((LINES_COVERED + ${line#LH:}))
+          elif [[ "$line" == LF:* ]]; then
+            LINES_TOTAL=$((LINES_TOTAL + ${line#LF:}))
+          fi
+        done < coverage/lcov.info
+
+        if [ "$LINES_TOTAL" -gt 0 ]; then
+          COVERAGE=$(echo "scale=1; $LINES_COVERED * 100 / $LINES_TOTAL" | bc)
+          echo "Coverage: ${COVERAGE}%"
+
+          if [ "$COVERAGE_THRESHOLD" -gt 0 ]; then
+            if [ "$(echo "$COVERAGE < $COVERAGE_THRESHOLD" | bc)" -eq 1 ]; then
+              echo "Coverage ${COVERAGE}% is below threshold ${COVERAGE_THRESHOLD}%"
+              exit 1
+            fi
+          fi
+        fi
+      fi
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage/cobertura-coverage.xml
+    paths:
+      - coverage/
+    expire_in: 7 days
+  coverage: '/Coverage:\s*(\d+\.?\d*)%/'
+  rules:
+    - if: $RUN_TESTS == "true"
+
+.node_build:
+  extends: .node_base
+  stage: build
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - source install.env
+    - |
+      case "$PM" in
+        pnpm) pnpm run build ;;
+        yarn) yarn build ;;
+        *) npm run build ;;
+      esac
+  artifacts:
+    paths:
+      - dist/
+      - build/
+      - .next/
+      - .output/
+    expire_in: 7 days
+  rules:
+    - if: $RUN_BUILD == "true"
+
+.node_monorepo:
+  extends: .node_base
+  before_script:
+    - cd "$WORKING_DIRECTORY"
+    - |
+      # Detect monorepo tool
+      if [ -f "pnpm-workspace.yaml" ]; then
+        npm install -g pnpm
+        pnpm install --frozen-lockfile
+        echo "PM=pnpm" >> install.env
+      elif [ -f "lerna.json" ]; then
+        npm ci
+        npx lerna bootstrap
+        echo "PM=npm" >> install.env
+      elif [ -f "nx.json" ]; then
+        npm ci
+        echo "PM=npm" >> install.env
+      else
+        npm ci
+        echo "PM=npm" >> install.env
+      fi
+
+.node_publish:
+  extends: .node_base
+  stage: deploy
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - source install.env
+    - |
+      echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+      case "$PM" in
+        pnpm) pnpm publish --no-git-checks ;;
+        yarn) yarn publish ;;
+        *) npm publish ;;
+      esac
+  rules:
+    - if: $CI_COMMIT_TAG

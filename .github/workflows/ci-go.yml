@@ -1,0 +1,338 @@
+name: Go CI
+
+on:
+  workflow_call:
+    inputs:
+      go-version:
+        description: 'Go version (e.g., 1.22.x, stable)'
+        type: string
+        default: 'stable'
+      working-directory:
+        description: 'Working directory'
+        type: string
+        default: '.'
+      # Feature toggles
+      run-tests:
+        description: 'Run unit tests'
+        type: boolean
+        default: true
+      run-lint:
+        description: 'Run golangci-lint'
+        type: boolean
+        default: true
+      run-build:
+        description: 'Build the project'
+        type: boolean
+        default: true
+      run-coverage:
+        description: 'Generate coverage report'
+        type: boolean
+        default: true
+      # Configuration
+      test-packages:
+        description: 'Packages to test (default: ./...)'
+        type: string
+        default: './...'
+      build-target:
+        description: 'Build target (e.g., ./cmd/main.go)'
+        type: string
+        default: ''
+      build-output:
+        description: 'Build output name'
+        type: string
+        default: 'app'
+      coverage-threshold:
+        description: 'Minimum coverage percentage (0 to disable)'
+        type: number
+        default: 0
+      golangci-lint-version:
+        description: 'golangci-lint version'
+        type: string
+        default: 'v1.61.0'
+      post-coverage-comment:
+        description: 'Post coverage as PR comment'
+        type: boolean
+        default: true
+
+jobs:
+  detect:
+    name: Detect Configuration
+    runs-on: ubuntu-latest
+    outputs:
+      has-tests: ${{ steps.detect.outputs.has_tests }}
+      build-target: ${{ steps.detect.outputs.build_target }}
+      go-changed: ${{ steps.changes.outputs.go_changed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect project configuration
+        id: detect
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          # Check for tests
+          if find . -name "*_test.go" -type f | head -1 | grep -q .; then
+            echo "has_tests=true" >> $GITHUB_OUTPUT
+            echo "🧪 Tests found"
+          else
+            echo "has_tests=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No tests found"
+          fi
+
+          # Detect build target
+          BUILD_TARGET="${{ inputs.build-target }}"
+          if [ -z "$BUILD_TARGET" ]; then
+            if [ -f "cmd/main.go" ]; then
+              BUILD_TARGET="./cmd/main.go"
+            elif [ -f "main.go" ]; then
+              BUILD_TARGET="./main.go"
+            elif [ -d "cmd" ]; then
+              # Find first main.go in cmd subdirectories
+              BUILD_TARGET=$(find cmd -name "main.go" -type f | head -1)
+              if [ -n "$BUILD_TARGET" ]; then
+                BUILD_TARGET="./$BUILD_TARGET"
+              fi
+            fi
+          fi
+          echo "build_target=$BUILD_TARGET" >> $GITHUB_OUTPUT
+          echo "🎯 Build target: $BUILD_TARGET"
+
+      - name: Detect changes
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_REF="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE_REF="${{ github.event.before }}"
+          fi
+
+          if git diff --name-only "$BASE_REF"..HEAD 2>/dev/null | grep -q '\.go$'; then
+            echo "go_changed=true" >> $GITHUB_OUTPUT
+            echo "🔍 Go files changed"
+          else
+            echo "go_changed=false" >> $GITHUB_OUTPUT
+            echo "🔍 No Go file changes"
+          fi
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    needs: detect
+    if: inputs.run-lint
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: true
+          cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: ${{ inputs.golangci-lint-version }}
+          working-directory: ${{ inputs.working-directory }}
+          args: --timeout=5m
+
+      - name: Lint summary
+        run: |
+          echo "## 🔍 Lint Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ golangci-lint passed" >> $GITHUB_STEP_SUMMARY
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: detect
+    if: inputs.run-tests && needs.detect.outputs.has-tests == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: true
+          cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+
+      - name: Verify dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: go mod verify
+
+      - name: Download dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: go mod download
+
+      - name: Run tests
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          echo "## 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          PACKAGES="${{ inputs.test-packages }}"
+
+          if [ "${{ inputs.run-coverage }}" = "true" ]; then
+            go test -v -race -coverprofile=coverage.out -covermode=atomic $PACKAGES 2>&1 | tee test_output.txt
+          else
+            go test -v -race $PACKAGES 2>&1 | tee test_output.txt
+          fi
+
+          # Parse test results
+          PASSED=$(grep -c "^--- PASS" test_output.txt || echo "0")
+          FAILED=$(grep -c "^--- FAIL" test_output.txt || echo "0")
+
+          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$FAILED" -gt 0 ]; then
+            exit 1
+          fi
+
+      - name: Generate coverage report
+        if: inputs.run-coverage
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -f "coverage.out" ]; then
+            # Calculate coverage
+            TOTAL_COVERAGE=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | sed 's/%//')
+
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 📊 Coverage Report" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Total Coverage: ${TOTAL_COVERAGE}%**" >> $GITHUB_STEP_SUMMARY
+
+            # Check threshold
+            THRESHOLD=${{ inputs.coverage-threshold }}
+            if [ "$THRESHOLD" -gt 0 ]; then
+              if [ "$(echo "$TOTAL_COVERAGE < $THRESHOLD" | bc)" -eq 1 ]; then
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "⚠️ Coverage is below threshold of ${THRESHOLD}%" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "✅ Coverage meets threshold (${THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+
+            # Store for PR comment
+            echo "TOTAL_COVERAGE=$TOTAL_COVERAGE" >> $GITHUB_ENV
+          fi
+
+      - name: Comment PR with coverage
+        if: github.event_name == 'pull_request' && inputs.run-coverage && inputs.post-coverage-comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const coverage = process.env.TOTAL_COVERAGE || 'N/A';
+            const threshold = ${{ inputs.coverage-threshold }};
+
+            let status = '✅';
+            if (threshold > 0 && parseFloat(coverage) < threshold) {
+              status = '⚠️';
+            }
+
+            const body = `## 📊 Go Coverage Report
+
+            | Metric | Value |
+            |--------|-------|
+            | **Coverage** | **${coverage}%** ${status} |
+
+            ${threshold > 0 ? `> Threshold: ${threshold}%` : ''}
+
+            <details>
+            <summary>Details</summary>
+
+            Run \`go tool cover -func=coverage.out\` locally to see detailed coverage.
+            </details>`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('📊 Go Coverage Report')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+            }
+
+      - name: Upload coverage artifact
+        if: inputs.run-coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: ${{ inputs.working-directory }}/coverage.out
+          retention-days: 7
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [detect, lint, test]
+    if: always() && inputs.run-build && needs.detect.outputs.build-target != '' && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.test.result == 'success' || needs.test.result == 'skipped')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: true
+          cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+
+      - name: Build
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          BUILD_TARGET="${{ needs.detect.outputs.build-target }}"
+          OUTPUT="${{ inputs.build-output }}"
+
+          echo "## 🔨 Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -n "$BUILD_TARGET" ]; then
+            echo "Building $BUILD_TARGET..."
+            go build -v -ldflags="-w -s" -o "$OUTPUT" "$BUILD_TARGET"
+
+            SIZE=$(du -h "$OUTPUT" | cut -f1)
+            echo "✅ Build successful" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Binary | \`$OUTPUT\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Size | $SIZE |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Building all packages..."
+            go build -v ./...
+            echo "✅ All packages compiled successfully" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload binary artifact
+        if: inputs.build-output != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-binary
+          path: ${{ inputs.working-directory }}/${{ inputs.build-output }}
+          retention-days: 7

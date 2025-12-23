@@ -1,0 +1,159 @@
+# Go CI Template for GitLab
+# Include this in your .gitlab-ci.yml:
+#   include:
+#     - remote: 'https://raw.githubusercontent.com/banua-coder/banua-coder-workflow/main/.gitlab/ci/go.gitlab-ci.yml'
+#
+# Variables you can override:
+#   GO_VERSION: Go version (default: 1.22)
+#   WORKING_DIRECTORY: Working directory (default: .)
+#   RUN_LINT: Run golangci-lint (default: "true")
+#   RUN_TESTS: Run tests (default: "true")
+#   RUN_COVERAGE: Generate coverage (default: "true")
+#   COVERAGE_THRESHOLD: Minimum coverage % (default: 0)
+#   RUN_BUILD: Build binary (default: "true")
+#   BUILD_TARGET: Build target (default: auto-detect)
+#   BUILD_OUTPUT: Output binary name (default: app)
+#   GOLANGCI_LINT_VERSION: golangci-lint version (default: v1.61.0)
+
+variables:
+  GO_VERSION: "1.22"
+  WORKING_DIRECTORY: "."
+  RUN_LINT: "true"
+  RUN_TESTS: "true"
+  RUN_COVERAGE: "true"
+  COVERAGE_THRESHOLD: "0"
+  RUN_BUILD: "true"
+  BUILD_TARGET: ""
+  BUILD_OUTPUT: "app"
+  GOLANGCI_LINT_VERSION: "v1.61.0"
+
+.go_base:
+  image: golang:${GO_VERSION}
+  before_script:
+    - cd "$WORKING_DIRECTORY"
+    - go mod download
+    - go mod verify
+  cache:
+    key: go-${CI_COMMIT_REF_SLUG}
+    paths:
+      - /go/pkg/mod/
+
+.go_lint:
+  extends: .go_base
+  stage: test
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - |
+      curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | \
+        sh -s -- -b $(go env GOPATH)/bin ${GOLANGCI_LINT_VERSION}
+    - golangci-lint run --timeout=5m
+  rules:
+    - if: $RUN_LINT == "true"
+
+.go_test:
+  extends: .go_base
+  stage: test
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - |
+      # Check if tests exist
+      if ! find . -name "*_test.go" -type f | head -1 | grep -q .; then
+        echo "No tests found, skipping..."
+        exit 0
+      fi
+    - |
+      if [ "$RUN_COVERAGE" = "true" ]; then
+        go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+        # Calculate and display coverage
+        COVERAGE=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | sed 's/%//')
+        echo "Coverage: ${COVERAGE}%"
+
+        # Check threshold
+        if [ "$COVERAGE_THRESHOLD" -gt 0 ]; then
+          if [ "$(echo "$COVERAGE < $COVERAGE_THRESHOLD" | bc)" -eq 1 ]; then
+            echo "Coverage ${COVERAGE}% is below threshold ${COVERAGE_THRESHOLD}%"
+            exit 1
+          fi
+        fi
+
+        # Generate cobertura report for GitLab
+        go install github.com/boumenot/gocover-cobertura@latest
+        gocover-cobertura < coverage.out > coverage.xml
+      else
+        go test -v -race ./...
+      fi
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    paths:
+      - coverage.out
+      - coverage.xml
+    expire_in: 7 days
+  coverage: '/Coverage:\s*(\d+\.?\d*)%/'
+  rules:
+    - if: $RUN_TESTS == "true"
+
+.go_build:
+  extends: .go_base
+  stage: build
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - |
+      # Auto-detect build target if not specified
+      TARGET="$BUILD_TARGET"
+      if [ -z "$TARGET" ]; then
+        if [ -f "cmd/main.go" ]; then
+          TARGET="./cmd/main.go"
+        elif [ -f "main.go" ]; then
+          TARGET="./main.go"
+        elif [ -d "cmd" ]; then
+          TARGET=$(find cmd -name "main.go" -type f | head -1)
+          if [ -n "$TARGET" ]; then
+            TARGET="./$TARGET"
+          fi
+        fi
+      fi
+
+      if [ -n "$TARGET" ]; then
+        echo "Building $TARGET..."
+        CGO_ENABLED=0 go build -v -ldflags="-w -s" -o "$BUILD_OUTPUT" "$TARGET"
+        ls -lh "$BUILD_OUTPUT"
+      else
+        echo "Building all packages..."
+        go build -v ./...
+      fi
+  artifacts:
+    paths:
+      - ${WORKING_DIRECTORY}/${BUILD_OUTPUT}
+    expire_in: 7 days
+  rules:
+    - if: $RUN_BUILD == "true"
+
+.go_security:
+  extends: .go_base
+  stage: test
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - go install golang.org/x/vuln/cmd/govulncheck@latest
+    - govulncheck ./...
+  allow_failure: true
+
+.go_with_postgres:
+  extends: .go_base
+  services:
+    - postgres:15
+  variables:
+    POSTGRES_DB: test
+    POSTGRES_USER: test
+    POSTGRES_PASSWORD: test
+    DATABASE_URL: "postgres://test:test@postgres:5432/test?sslmode=disable"
+
+.go_with_redis:
+  extends: .go_base
+  services:
+    - redis:7
+  variables:
+    REDIS_URL: "redis://redis:6379"

@@ -1,0 +1,160 @@
+# Laravel CI Template for GitLab
+# Include this in your .gitlab-ci.yml:
+#   include:
+#     - remote: 'https://raw.githubusercontent.com/banua-coder/banua-coder-workflow/main/.gitlab/ci/laravel.gitlab-ci.yml'
+#
+# Variables you can override:
+#   PHP_VERSION: PHP version (default: 8.3)
+#   NODE_VERSION: Node.js version for frontend (default: 20)
+#   WORKING_DIRECTORY: Working directory (default: .)
+#   RUN_LINT: Run PHP linting (default: "true")
+#   RUN_TESTS: Run tests (default: "true")
+#   RUN_COVERAGE: Generate coverage (default: "true")
+#   COVERAGE_THRESHOLD: Minimum coverage % (default: 0)
+#   RUN_FRONTEND_BUILD: Build frontend assets (default: "true")
+#   DB_CONNECTION: Database connection for tests (default: sqlite)
+
+variables:
+  PHP_VERSION: "8.3"
+  NODE_VERSION: "20"
+  WORKING_DIRECTORY: "."
+  RUN_LINT: "true"
+  RUN_TESTS: "true"
+  RUN_COVERAGE: "true"
+  COVERAGE_THRESHOLD: "0"
+  RUN_FRONTEND_BUILD: "true"
+  DB_CONNECTION: "sqlite"
+  DB_DATABASE: ":memory:"
+
+.laravel_base:
+  image: php:${PHP_VERSION}-cli
+  before_script:
+    - apt-get update && apt-get install -y git unzip libzip-dev libpng-dev libonig-dev libxml2-dev
+    - docker-php-ext-install pdo pdo_mysql zip gd mbstring xml bcmath
+    - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+    - cd "$WORKING_DIRECTORY"
+    - composer install --prefer-dist --no-progress --no-interaction
+    - |
+      if [ ! -f ".env" ] && [ -f ".env.example" ]; then
+        cp .env.example .env
+        php artisan key:generate --no-interaction
+      fi
+  cache:
+    key: laravel-${CI_COMMIT_REF_SLUG}
+    paths:
+      - vendor/
+      - node_modules/
+
+.laravel_lint:
+  extends: .laravel_base
+  stage: test
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - |
+      if [ -f "vendor/bin/pint" ]; then
+        ./vendor/bin/pint --test
+      elif [ -f "vendor/bin/phpcs" ]; then
+        ./vendor/bin/phpcs
+      elif [ -f "vendor/bin/php-cs-fixer" ]; then
+        ./vendor/bin/php-cs-fixer fix --dry-run --diff
+      else
+        echo "No PHP linter found, skipping..."
+      fi
+  rules:
+    - if: $RUN_LINT == "true"
+
+.laravel_test:
+  extends: .laravel_base
+  stage: test
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - |
+      if [ "$RUN_COVERAGE" = "true" ]; then
+        # Install pcov for coverage
+        pecl install pcov || true
+        docker-php-ext-enable pcov || true
+
+        if [ -f "vendor/bin/pest" ]; then
+          ./vendor/bin/pest --coverage --coverage-clover=coverage.xml
+        else
+          php artisan test --coverage --coverage-clover=coverage.xml
+        fi
+      else
+        if [ -f "vendor/bin/pest" ]; then
+          ./vendor/bin/pest
+        else
+          php artisan test
+        fi
+      fi
+    - |
+      if [ "$RUN_COVERAGE" = "true" ] && [ -f "coverage.xml" ]; then
+        COVERAGE=$(grep -oP 'line-rate="\K[^"]+' coverage.xml | head -1 || echo "0")
+        COVERAGE_PCT=$(echo "$COVERAGE * 100" | bc)
+        echo "Coverage: ${COVERAGE_PCT}%"
+
+        if [ "$COVERAGE_THRESHOLD" -gt 0 ]; then
+          if [ "$(echo "$COVERAGE_PCT < $COVERAGE_THRESHOLD" | bc)" -eq 1 ]; then
+            echo "Coverage ${COVERAGE_PCT}% is below threshold ${COVERAGE_THRESHOLD}%"
+            exit 1
+          fi
+        fi
+      fi
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    paths:
+      - coverage.xml
+    expire_in: 7 days
+  coverage: '/Coverage:\s*(\d+\.?\d*)%/'
+  rules:
+    - if: $RUN_TESTS == "true"
+
+.laravel_frontend:
+  image: node:${NODE_VERSION}
+  stage: build
+  before_script:
+    - cd "$WORKING_DIRECTORY"
+    - |
+      if [ -f "pnpm-lock.yaml" ]; then
+        npm install -g pnpm
+        pnpm install --frozen-lockfile
+      elif [ -f "yarn.lock" ]; then
+        yarn install --frozen-lockfile
+      else
+        npm ci
+      fi
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - |
+      if [ -f "pnpm-lock.yaml" ]; then
+        pnpm run build
+      elif [ -f "yarn.lock" ]; then
+        yarn build
+      else
+        npm run build
+      fi
+  artifacts:
+    paths:
+      - public/build/
+    expire_in: 7 days
+  cache:
+    key: node-${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  rules:
+    - if: $RUN_FRONTEND_BUILD == "true"
+
+.laravel_with_mysql:
+  extends: .laravel_base
+  services:
+    - mysql:8.0
+  variables:
+    MYSQL_DATABASE: testing
+    MYSQL_ROOT_PASSWORD: password
+    DB_CONNECTION: mysql
+    DB_HOST: mysql
+    DB_DATABASE: testing
+    DB_USERNAME: root
+    DB_PASSWORD: password

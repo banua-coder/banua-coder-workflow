@@ -1,0 +1,158 @@
+# Flutter CI Template for GitLab
+# Include this in your .gitlab-ci.yml:
+#   include:
+#     - remote: 'https://raw.githubusercontent.com/banua-coder/banua-coder-workflow/main/.gitlab/ci/flutter.gitlab-ci.yml'
+#
+# Variables you can override:
+#   FLUTTER_VERSION: Flutter SDK version (default: stable)
+#   FLUTTER_CHANNEL: Flutter channel (default: stable)
+#   WORKING_DIRECTORY: Working directory (default: .)
+#   RUN_ANALYZE: Run static analysis (default: "true")
+#   RUN_FORMAT: Check formatting (default: "true")
+#   RUN_TESTS: Run tests (default: "true")
+#   RUN_COVERAGE: Generate coverage (default: "true")
+#   COVERAGE_THRESHOLD: Minimum coverage % (default: 0)
+#   MELOS_BOOTSTRAP: Run melos bootstrap for monorepos (default: "auto")
+
+variables:
+  FLUTTER_VERSION: "stable"
+  FLUTTER_CHANNEL: "stable"
+  WORKING_DIRECTORY: "."
+  RUN_ANALYZE: "true"
+  RUN_FORMAT: "true"
+  RUN_TESTS: "true"
+  RUN_COVERAGE: "true"
+  COVERAGE_THRESHOLD: "0"
+  MELOS_BOOTSTRAP: "auto"
+
+.flutter_base:
+  image: ghcr.io/cirruslabs/flutter:${FLUTTER_VERSION}
+  before_script:
+    - flutter --version
+    - |
+      cd "$WORKING_DIRECTORY"
+      if [ -f "melos.yaml" ]; then
+        echo "Detected monorepo (melos)"
+        dart pub global activate melos
+        if [ "$MELOS_BOOTSTRAP" = "true" ] || [ "$MELOS_BOOTSTRAP" = "auto" ]; then
+          melos bootstrap
+        fi
+      else
+        flutter pub get
+      fi
+  cache:
+    key: flutter-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .pub-cache/
+      - .dart_tool/
+
+.flutter_analyze:
+  extends: .flutter_base
+  stage: test
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - |
+      if [ -f "melos.yaml" ]; then
+        melos run analyze --no-select || flutter analyze --no-fatal-infos
+      else
+        flutter analyze --no-fatal-infos
+      fi
+  rules:
+    - if: $RUN_ANALYZE == "true"
+
+.flutter_format:
+  extends: .flutter_base
+  stage: test
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - |
+      if [ -f "melos.yaml" ]; then
+        melos run format --no-select || dart format --set-exit-if-changed .
+      else
+        dart format --set-exit-if-changed .
+      fi
+  rules:
+    - if: $RUN_FORMAT == "true"
+
+.flutter_test:
+  extends: .flutter_base
+  stage: test
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - |
+      if [ -f "melos.yaml" ]; then
+        if [ "$RUN_COVERAGE" = "true" ]; then
+          melos run test --no-select -- --coverage || flutter test --coverage
+        else
+          melos run test --no-select || flutter test
+        fi
+      else
+        if [ "$RUN_COVERAGE" = "true" ]; then
+          flutter test --coverage
+        else
+          flutter test
+        fi
+      fi
+    - |
+      if [ "$RUN_COVERAGE" = "true" ] && [ -f "coverage/lcov.info" ]; then
+        # Calculate coverage
+        LINES_COVERED=$(grep -c "^DA:" coverage/lcov.info | grep -oE '[0-9]+' || echo "0")
+        LINES_TOTAL=$(grep "^LF:" coverage/lcov.info | cut -d: -f2 | awk '{s+=$1} END {print s}' || echo "0")
+        if [ "$LINES_TOTAL" -gt 0 ]; then
+          COVERAGE=$(echo "scale=1; $LINES_COVERED * 100 / $LINES_TOTAL" | bc)
+          echo "Coverage: ${COVERAGE}%"
+
+          if [ "$COVERAGE_THRESHOLD" -gt 0 ]; then
+            if [ "$(echo "$COVERAGE < $COVERAGE_THRESHOLD" | bc)" -eq 1 ]; then
+              echo "Coverage ${COVERAGE}% is below threshold ${COVERAGE_THRESHOLD}%"
+              exit 1
+            fi
+          fi
+        fi
+      fi
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage/cobertura.xml
+    paths:
+      - coverage/
+    expire_in: 7 days
+  coverage: '/Coverage:\s*(\d+\.?\d*)%/'
+  rules:
+    - if: $RUN_TESTS == "true"
+
+.flutter_build_android:
+  extends: .flutter_base
+  stage: build
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - flutter build apk --release
+  artifacts:
+    paths:
+      - build/app/outputs/flutter-apk/
+    expire_in: 7 days
+
+.flutter_build_ios:
+  extends: .flutter_base
+  stage: build
+  tags:
+    - macos
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - flutter build ios --release --no-codesign
+  artifacts:
+    paths:
+      - build/ios/iphoneos/
+    expire_in: 7 days
+
+.flutter_build_web:
+  extends: .flutter_base
+  stage: build
+  script:
+    - cd "$WORKING_DIRECTORY"
+    - flutter build web --release
+  artifacts:
+    paths:
+      - build/web/
+    expire_in: 7 days
