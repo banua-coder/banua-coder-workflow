@@ -623,6 +623,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup PHP
+        if: needs.detect.outputs.has-wayfinder == 'true'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          tools: composer:v2
+
+      - name: Get Composer cache directory
+        if: needs.detect.outputs.has-wayfinder == 'true'
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache Composer dependencies
+        if: needs.detect.outputs.has-wayfinder == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ inputs.php-version }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            composer-${{ runner.os }}-${{ inputs.php-version }}-
+            composer-${{ runner.os }}-
+
+      - name: Install Composer dependencies
+        if: needs.detect.outputs.has-wayfinder == 'true'
+        working-directory: ${{ inputs.working-directory }}
+        run: composer install --prefer-dist --no-progress --no-interaction
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
