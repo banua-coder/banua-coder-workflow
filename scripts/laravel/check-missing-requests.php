@@ -75,7 +75,7 @@ foreach ($files as $file) {
                 // PIN verification methods (validated via session/middleware)
                 'showVerify', 'check',
                 // Webhook handlers (use raw request for signature verification)
-                'handleInvoice',
+                'handleInvoice', 'handle',
             ];
             if (in_array($methodName, $skipMethods)) {
                 continue;
