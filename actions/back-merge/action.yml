@@ -22,9 +22,9 @@ inputs:
     required: false
     default: 'false'
   conflict-resolution:
-    description: 'How to resolve version conflicts (ours=keep develop version, theirs=use main version, manual)'
+    description: 'How to resolve version conflicts (keep-higher=keep higher version, keep-develop=always keep develop version, keep-main=use main version, manual=no auto-resolution)'
     required: false
-    default: 'ours'
+    default: 'keep-higher'
 
 outputs:
   pr-number:
@@ -91,30 +91,107 @@ runs:
         RESOLUTION="${{ inputs.conflict-resolution }}"
         BASE="${{ inputs.base-branch }}"
 
-        # Common version files
-        VERSION_FILES="config/app.php package.json pubspec.yaml composer.json version.txt gradle.properties"
+        # Common version files and their version extraction patterns
+        VERSION_FILES="config/app.php package.json pubspec.yaml composer.json version.txt gradle.properties build.gradle.kts build.gradle"
 
         git fetch origin "$BASE"
 
         # Attempt merge
         git merge "origin/$BASE" --no-commit || true
 
+        # Function to extract version from a file
+        extract_version() {
+          local file="$1"
+          local content="$2"
+
+          case "$file" in
+            config/app.php)
+              echo "$content" | grep -oP "version.*?'\K[0-9]+\.[0-9]+\.[0-9]+" | head -1
+              ;;
+            package.json|composer.json)
+              echo "$content" | grep -oP '"version"\s*:\s*"\K[0-9]+\.[0-9]+\.[0-9]+' | head -1
+              ;;
+            pubspec.yaml)
+              echo "$content" | grep -oP '^version:\s*\K[0-9]+\.[0-9]+\.[0-9]+' | head -1
+              ;;
+            version.txt)
+              echo "$content" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+              ;;
+            gradle.properties)
+              echo "$content" | grep -oP 'version\s*=\s*\K[0-9]+\.[0-9]+\.[0-9]+' | head -1
+              ;;
+            build.gradle|build.gradle.kts)
+              echo "$content" | grep -oP "version\s*=\s*['\"]?\K[0-9]+\.[0-9]+\.[0-9]+" | head -1
+              ;;
+          esac
+        }
+
+        # Function to compare semver versions (returns 0 if v1 >= v2, 1 otherwise)
+        version_gte() {
+          local v1="$1"
+          local v2="$2"
+
+          if [ -z "$v1" ]; then return 1; fi
+          if [ -z "$v2" ]; then return 0; fi
+
+          # Split versions into arrays
+          IFS='.' read -r v1_major v1_minor v1_patch <<< "$v1"
+          IFS='.' read -r v2_major v2_minor v2_patch <<< "$v2"
+
+          # Compare major
+          if [ "$v1_major" -gt "$v2_major" ]; then return 0; fi
+          if [ "$v1_major" -lt "$v2_major" ]; then return 1; fi
+
+          # Compare minor
+          if [ "$v1_minor" -gt "$v2_minor" ]; then return 0; fi
+          if [ "$v1_minor" -lt "$v2_minor" ]; then return 1; fi
+
+          # Compare patch
+          if [ "$v1_patch" -ge "$v2_patch" ]; then return 0; fi
+          return 1
+        }
+
         # Resolve version file conflicts
         for file in $VERSION_FILES; do
-          if [ -f "$file" ] && git diff --name-only --diff-filter=U | grep -q "$file"; then
-            echo "Resolving conflict in $file using $RESOLUTION strategy"
-            if [ "$RESOLUTION" = "theirs" ]; then
+          if [ -f "$file" ] && git diff --name-only --diff-filter=U | grep -q "^${file}$"; then
+            echo "🔍 Found conflict in $file"
+
+            # In this merge context:
+            # --ours = current branch (back-merge branch, which is from main)
+            # --theirs = the branch being merged in (develop)
+
+            if [ "$RESOLUTION" = "keep-higher" ]; then
+              # Get both versions
+              MAIN_VERSION=$(git show :2:"$file" 2>/dev/null | grep -oP "version.*?['\"]?\K[0-9]+\.[0-9]+\.[0-9]+" | head -1 || echo "")
+              DEVELOP_VERSION=$(git show :3:"$file" 2>/dev/null | grep -oP "version.*?['\"]?\K[0-9]+\.[0-9]+\.[0-9]+" | head -1 || echo "")
+
+              echo "  Main version: ${MAIN_VERSION:-unknown}"
+              echo "  Develop version: ${DEVELOP_VERSION:-unknown}"
+
+              if version_gte "$DEVELOP_VERSION" "$MAIN_VERSION"; then
+                echo "  ✅ Keeping develop version ($DEVELOP_VERSION >= $MAIN_VERSION)"
+                git checkout --theirs "$file"
+              else
+                echo "  ✅ Keeping main version ($MAIN_VERSION > $DEVELOP_VERSION)"
+                git checkout --ours "$file"
+              fi
+            elif [ "$RESOLUTION" = "keep-develop" ]; then
+              echo "  ✅ Keeping develop version (strategy: keep-develop)"
               git checkout --theirs "$file"
-            else
+            elif [ "$RESOLUTION" = "keep-main" ]; then
+              echo "  ✅ Keeping main version (strategy: keep-main)"
               git checkout --ours "$file"
             fi
+
             git add "$file"
           fi
         done
 
         # Check if there are still unresolved conflicts
-        if git diff --name-only --diff-filter=U | grep -v -E "$(echo $VERSION_FILES | tr ' ' '|')" | head -1; then
-          echo "⚠️ There are still unresolved conflicts in non-version files"
+        REMAINING_CONFLICTS=$(git diff --name-only --diff-filter=U | head -5)
+        if [ -n "$REMAINING_CONFLICTS" ]; then
+          echo "⚠️ There are still unresolved conflicts in:"
+          echo "$REMAINING_CONFLICTS"
         fi
 
         # Complete the merge if possible
@@ -140,20 +217,34 @@ runs:
         BRANCH="${{ steps.create-branch.outputs.branch_name }}"
         HAS_CONFLICTS="${{ steps.check-conflicts.outputs.has_conflicts }}"
 
-        BODY="## Back-merge $VERSION to $BASE
+        RESOLUTION="${{ inputs.conflict-resolution }}"
 
-        This PR merges the release \`$VERSION\` back to \`$BASE\`.
-
-        ### Changes included:
-        - Release $VERSION changes
-        - Changelog updates
-
-        "
+        # Build PR body
+        BODY="## Back-merge $VERSION to $BASE"
+        BODY="$BODY"$'\n'$'\n'"This PR merges the release \`$VERSION\` back to \`$BASE\`."
+        BODY="$BODY"$'\n'$'\n'"### Changes included"
+        BODY="$BODY"$'\n'"- Release $VERSION changes"
+        BODY="$BODY"$'\n'"- Changelog updates"
 
         if [ "$HAS_CONFLICTS" = "true" ]; then
-          BODY="$BODY
-        ⚠️ **Note**: This PR had merge conflicts. Version file conflicts were auto-resolved using the \`${{ inputs.conflict-resolution }}\` strategy. Please review carefully.
-        "
+          RESOLUTION_DESC=""
+          case "$RESOLUTION" in
+            keep-higher)
+              RESOLUTION_DESC="Version conflicts were resolved by keeping the **higher version number**."
+              ;;
+            keep-develop)
+              RESOLUTION_DESC="Version conflicts were resolved by keeping the **develop branch version**."
+              ;;
+            keep-main)
+              RESOLUTION_DESC="Version conflicts were resolved by keeping the **main branch version**."
+              ;;
+            manual)
+              RESOLUTION_DESC="Version conflicts require **manual resolution**."
+              ;;
+          esac
+
+          BODY="$BODY"$'\n'$'\n'"> [!WARNING]"
+          BODY="$BODY"$'\n'"> This PR had merge conflicts. $RESOLUTION_DESC Please review carefully."
         fi
 
         PR_URL=$(gh pr create \
@@ -177,3 +268,4 @@ runs:
         PR_NUMBER="${{ steps.create-pr.outputs.pr_number }}"
         gh pr merge "$PR_NUMBER" --merge --auto
         echo "✅ Auto-merge enabled for PR #$PR_NUMBER"
+
