@@ -1,0 +1,619 @@
+name: Node.js CI
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: 'Node.js version'
+        type: string
+        default: '20'
+      package-manager:
+        description: 'Package manager (npm, pnpm, yarn, bun, auto)'
+        type: string
+        default: 'auto'
+      pnpm-version:
+        description: 'pnpm version (if using pnpm)'
+        type: string
+        default: '9'
+      working-directory:
+        description: 'Working directory'
+        type: string
+        default: '.'
+      # Feature toggles
+      run-lint:
+        description: 'Run linting'
+        type: boolean
+        default: true
+      run-typecheck:
+        description: 'Run TypeScript type checking'
+        type: boolean
+        default: true
+      run-tests:
+        description: 'Run tests'
+        type: boolean
+        default: true
+      run-coverage:
+        description: 'Generate coverage report'
+        type: boolean
+        default: true
+      run-build:
+        description: 'Build the project'
+        type: boolean
+        default: true
+      # Configuration
+      lint-command:
+        description: 'Custom lint command (empty = auto-detect)'
+        type: string
+        default: ''
+      typecheck-command:
+        description: 'Custom typecheck command (empty = auto-detect)'
+        type: string
+        default: ''
+      test-command:
+        description: 'Custom test command (empty = auto-detect)'
+        type: string
+        default: ''
+      build-command:
+        description: 'Custom build command (empty = auto-detect)'
+        type: string
+        default: ''
+      coverage-threshold:
+        description: 'Minimum coverage percentage (0 to disable)'
+        type: number
+        default: 0
+      post-coverage-comment:
+        description: 'Post coverage as PR comment'
+        type: boolean
+        default: true
+
+jobs:
+  detect:
+    name: Detect Configuration
+    runs-on: ubuntu-latest
+    outputs:
+      package-manager: ${{ steps.detect.outputs.package_manager }}
+      has-tests: ${{ steps.detect.outputs.has_tests }}
+      has-typescript: ${{ steps.detect.outputs.has_typescript }}
+      is-monorepo: ${{ steps.detect.outputs.is_monorepo }}
+      monorepo-tool: ${{ steps.detect.outputs.monorepo_tool }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect project configuration
+        id: detect
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          # Detect package manager
+          PM="${{ inputs.package-manager }}"
+          if [ "$PM" = "auto" ]; then
+            if [ -f "pnpm-lock.yaml" ]; then
+              PM="pnpm"
+            elif [ -f "yarn.lock" ]; then
+              PM="yarn"
+            elif [ -f "bun.lockb" ]; then
+              PM="bun"
+            else
+              PM="npm"
+            fi
+          fi
+          echo "package_manager=$PM" >> $GITHUB_OUTPUT
+          echo "📦 Package manager: $PM"
+
+          # Check for tests
+          if grep -q '"test"' package.json 2>/dev/null || [ -d "__tests__" ] || [ -d "tests" ] || [ -d "test" ]; then
+            echo "has_tests=true" >> $GITHUB_OUTPUT
+            echo "🧪 Tests detected"
+          else
+            echo "has_tests=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Check for TypeScript
+          if [ -f "tsconfig.json" ]; then
+            echo "has_typescript=true" >> $GITHUB_OUTPUT
+            echo "📘 TypeScript detected"
+          else
+            echo "has_typescript=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Check for monorepo
+          if [ -f "pnpm-workspace.yaml" ]; then
+            echo "is_monorepo=true" >> $GITHUB_OUTPUT
+            echo "monorepo_tool=pnpm" >> $GITHUB_OUTPUT
+            echo "📁 Monorepo: pnpm workspaces"
+          elif [ -f "lerna.json" ]; then
+            echo "is_monorepo=true" >> $GITHUB_OUTPUT
+            echo "monorepo_tool=lerna" >> $GITHUB_OUTPUT
+            echo "📁 Monorepo: Lerna"
+          elif [ -f "nx.json" ]; then
+            echo "is_monorepo=true" >> $GITHUB_OUTPUT
+            echo "monorepo_tool=nx" >> $GITHUB_OUTPUT
+            echo "📁 Monorepo: Nx"
+          elif [ -f "turbo.json" ]; then
+            echo "is_monorepo=true" >> $GITHUB_OUTPUT
+            echo "monorepo_tool=turbo" >> $GITHUB_OUTPUT
+            echo "📁 Monorepo: Turborepo"
+          else
+            echo "is_monorepo=false" >> $GITHUB_OUTPUT
+            echo "monorepo_tool=" >> $GITHUB_OUTPUT
+          fi
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    needs: detect
+    if: inputs.run-lint
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Setup pnpm
+        if: needs.detect.outputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup bun
+        if: needs.detect.outputs.package-manager == 'bun'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Get cache directory
+        id: cache-dir
+        shell: bash
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) echo "dir=$(pnpm store path)" >> $GITHUB_OUTPUT ;;
+            yarn) echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT ;;
+            bun) echo "dir=$HOME/.bun/install/cache" >> $GITHUB_OUTPUT ;;
+            *) echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT ;;
+          esac
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.cache-dir.outputs.dir }}
+          key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ inputs.node-version }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json', '**/bun.lockb') }}
+          restore-keys: |
+            ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ inputs.node-version }}-
+            ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            bun) bun install --frozen-lockfile ;;
+            *) npm ci ;;
+          esac
+
+      - name: Run lint
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          echo "## 🔍 Lint Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          PM="${{ needs.detect.outputs.package-manager }}"
+
+          if [ -n "${{ inputs.lint-command }}" ]; then
+            ${{ inputs.lint-command }}
+          else
+            case "$PM" in
+              pnpm) pnpm run lint ;;
+              yarn) yarn lint ;;
+              bun) bun run lint ;;
+              *) npm run lint ;;
+            esac
+          fi
+
+          echo "✅ Lint passed" >> $GITHUB_STEP_SUMMARY
+
+  typecheck:
+    name: TypeScript Check
+    runs-on: ubuntu-latest
+    needs: detect
+    if: inputs.run-typecheck && needs.detect.outputs.has-typescript == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Setup pnpm
+        if: needs.detect.outputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup bun
+        if: needs.detect.outputs.package-manager == 'bun'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Get cache directory
+        id: cache-dir
+        shell: bash
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) echo "dir=$(pnpm store path)" >> $GITHUB_OUTPUT ;;
+            yarn) echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT ;;
+            bun) echo "dir=$HOME/.bun/install/cache" >> $GITHUB_OUTPUT ;;
+            *) echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT ;;
+          esac
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.cache-dir.outputs.dir }}
+          key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ inputs.node-version }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json', '**/bun.lockb') }}
+          restore-keys: |
+            ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ inputs.node-version }}-
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            bun) bun install --frozen-lockfile ;;
+            *) npm ci ;;
+          esac
+
+      - name: Run typecheck
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          echo "## 🔍 TypeScript Check Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          PM="${{ needs.detect.outputs.package-manager }}"
+
+          if [ -n "${{ inputs.typecheck-command }}" ]; then
+            ${{ inputs.typecheck-command }}
+          else
+            # Try common typecheck scripts first
+            case "$PM" in
+              pnpm) pnpm run typecheck 2>/dev/null || pnpm run type-check 2>/dev/null || pnpm exec tsc --noEmit ;;
+              yarn) yarn typecheck 2>/dev/null || yarn type-check 2>/dev/null || yarn tsc --noEmit ;;
+              bun) bun run typecheck 2>/dev/null || bun run type-check 2>/dev/null || bun x tsc --noEmit ;;
+              *) npm run typecheck 2>/dev/null || npm run type-check 2>/dev/null || npx tsc --noEmit ;;
+            esac
+          fi
+
+          echo "✅ TypeScript check passed" >> $GITHUB_STEP_SUMMARY
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: detect
+    if: inputs.run-tests && needs.detect.outputs.has-tests == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Setup pnpm
+        if: needs.detect.outputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup bun
+        if: needs.detect.outputs.package-manager == 'bun'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Get cache directory
+        id: cache-dir
+        shell: bash
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) echo "dir=$(pnpm store path)" >> $GITHUB_OUTPUT ;;
+            yarn) echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT ;;
+            bun) echo "dir=$HOME/.bun/install/cache" >> $GITHUB_OUTPUT ;;
+            *) echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT ;;
+          esac
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.cache-dir.outputs.dir }}
+          key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ inputs.node-version }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json', '**/bun.lockb') }}
+          restore-keys: |
+            ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ inputs.node-version }}-
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            bun) bun install --frozen-lockfile ;;
+            *) npm ci ;;
+          esac
+
+      - name: Run tests
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          echo "## 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          PM="${{ needs.detect.outputs.package-manager }}"
+          COVERAGE_ARG=""
+
+          if [ "${{ inputs.run-coverage }}" = "true" ]; then
+            COVERAGE_ARG="--coverage"
+          fi
+
+          if [ -n "${{ inputs.test-command }}" ]; then
+            ${{ inputs.test-command }}
+          else
+            case "$PM" in
+              pnpm)
+                if [ "${{ inputs.run-coverage }}" = "true" ]; then
+                  pnpm run test:coverage 2>/dev/null || pnpm run test -- --coverage 2>/dev/null || pnpm test $COVERAGE_ARG
+                else
+                  pnpm test
+                fi
+                ;;
+              yarn)
+                if [ "${{ inputs.run-coverage }}" = "true" ]; then
+                  yarn test:coverage 2>/dev/null || yarn test --coverage
+                else
+                  yarn test
+                fi
+                ;;
+              bun)
+                if [ "${{ inputs.run-coverage }}" = "true" ]; then
+                  bun run test:coverage 2>/dev/null || bun test --coverage
+                else
+                  bun test
+                fi
+                ;;
+              *)
+                if [ "${{ inputs.run-coverage }}" = "true" ]; then
+                  npm run test:coverage 2>/dev/null || npm test -- --coverage
+                else
+                  npm test
+                fi
+                ;;
+            esac
+          fi
+
+          echo "✅ Tests passed" >> $GITHUB_STEP_SUMMARY
+
+      - name: Generate coverage report
+        if: inputs.run-coverage
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          LINES_COVERED=0
+          LINES_TOTAL=0
+
+          # Try lcov format first
+          if [ -f "coverage/lcov.info" ]; then
+            while IFS= read -r line; do
+              if [[ "$line" == LH:* ]]; then
+                LINES_COVERED=$((LINES_COVERED + ${line#LH:}))
+              elif [[ "$line" == LF:* ]]; then
+                LINES_TOTAL=$((LINES_TOTAL + ${line#LF:}))
+              fi
+            done < coverage/lcov.info
+          # Try coverage-summary.json (Jest)
+          elif [ -f "coverage/coverage-summary.json" ]; then
+            LINES_COVERED=$(cat coverage/coverage-summary.json | grep -oP '"lines":\s*\{"total":\s*\d+,\s*"covered":\s*\K\d+' | head -1 || echo "0")
+            LINES_TOTAL=$(cat coverage/coverage-summary.json | grep -oP '"lines":\s*\{"total":\s*\K\d+' | head -1 || echo "0")
+          fi
+
+          if [ "$LINES_TOTAL" -gt 0 ]; then
+            COVERAGE=$(echo "scale=1; $LINES_COVERED * 100 / $LINES_TOTAL" | bc)
+
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 📊 Coverage Report" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Lines Covered | $LINES_COVERED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Total Lines | $LINES_TOTAL |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Coverage** | **${COVERAGE}%** |" >> $GITHUB_STEP_SUMMARY
+
+            # Check threshold
+            THRESHOLD=${{ inputs.coverage-threshold }}
+            if [ "$THRESHOLD" -gt 0 ]; then
+              if [ "$(echo "$COVERAGE < $THRESHOLD" | bc)" -eq 1 ]; then
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "⚠️ Coverage is below threshold of ${THRESHOLD}%" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "✅ Coverage meets threshold (${THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+
+            # Store for PR comment
+            echo "TOTAL_COVERAGE=$COVERAGE" >> $GITHUB_ENV
+            echo "LINES_COVERED=$LINES_COVERED" >> $GITHUB_ENV
+            echo "LINES_TOTAL=$LINES_TOTAL" >> $GITHUB_ENV
+          fi
+
+      - name: Comment PR with coverage
+        if: github.event_name == 'pull_request' && inputs.run-coverage && inputs.post-coverage-comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const coverage = process.env.TOTAL_COVERAGE || 'N/A';
+            const linesCovered = process.env.LINES_COVERED || 'N/A';
+            const linesTotal = process.env.LINES_TOTAL || 'N/A';
+            const threshold = ${{ inputs.coverage-threshold }};
+
+            let status = '✅';
+            if (threshold > 0 && parseFloat(coverage) < threshold) {
+              status = '⚠️';
+            }
+
+            const body = `## 📊 Node.js Coverage Report
+
+            | Metric | Value |
+            |--------|-------|
+            | Lines Covered | ${linesCovered} |
+            | Total Lines | ${linesTotal} |
+            | **Coverage** | **${coverage}%** ${status} |
+
+            ${threshold > 0 ? `> Threshold: ${threshold}%` : ''}
+
+            <details>
+            <summary>Details</summary>
+
+            Run \`npm test -- --coverage\` locally to see detailed coverage.
+            </details>`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('📊 Node.js Coverage Report')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+            }
+
+      - name: Upload coverage artifact
+        if: inputs.run-coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-coverage
+          path: |
+            ${{ inputs.working-directory }}/coverage/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [detect, lint, typecheck, test]
+    if: always() && inputs.run-build && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.typecheck.result == 'success' || needs.typecheck.result == 'skipped') && (needs.test.result == 'success' || needs.test.result == 'skipped')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Setup pnpm
+        if: needs.detect.outputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup bun
+        if: needs.detect.outputs.package-manager == 'bun'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Get cache directory
+        id: cache-dir
+        shell: bash
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) echo "dir=$(pnpm store path)" >> $GITHUB_OUTPUT ;;
+            yarn) echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT ;;
+            bun) echo "dir=$HOME/.bun/install/cache" >> $GITHUB_OUTPUT ;;
+            *) echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT ;;
+          esac
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.cache-dir.outputs.dir }}
+          key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ inputs.node-version }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json', '**/bun.lockb') }}
+          restore-keys: |
+            ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ inputs.node-version }}-
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            bun) bun install --frozen-lockfile ;;
+            *) npm ci ;;
+          esac
+
+      - name: Build
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          echo "## 🔨 Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          PM="${{ needs.detect.outputs.package-manager }}"
+
+          if [ -n "${{ inputs.build-command }}" ]; then
+            ${{ inputs.build-command }}
+          else
+            case "$PM" in
+              pnpm) pnpm run build ;;
+              yarn) yarn build ;;
+              bun) bun run build ;;
+              *) npm run build ;;
+            esac
+          fi
+
+          # Report build size
+          for dir in dist build .next .output out; do
+            if [ -d "$dir" ]; then
+              SIZE=$(du -sh "$dir" | cut -f1)
+              echo "✅ Build successful" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+              echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+              echo "| Output | \`$dir/\` |" >> $GITHUB_STEP_SUMMARY
+              echo "| Size | $SIZE |" >> $GITHUB_STEP_SUMMARY
+              break
+            fi
+          done
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-build
+          path: |
+            ${{ inputs.working-directory }}/dist/
+            ${{ inputs.working-directory }}/build/
+            ${{ inputs.working-directory }}/.next/
+            ${{ inputs.working-directory }}/.output/
+            ${{ inputs.working-directory }}/out/
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,0 +1,633 @@
+name: Laravel CI
+
+on:
+  workflow_call:
+    inputs:
+      php-version:
+        description: 'PHP version'
+        type: string
+        default: '8.3'
+      node-version:
+        description: 'Node.js version for frontend'
+        type: string
+        default: '20'
+      pnpm-version:
+        description: 'pnpm version (empty = use packageManager from package.json)'
+        type: string
+        default: ''
+      working-directory:
+        description: 'Working directory'
+        type: string
+        default: '.'
+      # Feature toggles
+      run-lint:
+        description: 'Run PHP linting (Pint)'
+        type: boolean
+        default: true
+      run-frontend-lint:
+        description: 'Run frontend linting (ESLint/Prettier)'
+        type: boolean
+        default: true
+      run-typecheck:
+        description: 'Run TypeScript type checking'
+        type: boolean
+        default: true
+      run-tests:
+        description: 'Run tests'
+        type: boolean
+        default: true
+      run-coverage:
+        description: 'Generate coverage report'
+        type: boolean
+        default: true
+      build-assets:
+        description: 'Build frontend assets'
+        type: boolean
+        default: true
+      # Configuration
+      database:
+        description: 'Database type (sqlite, mysql, pgsql)'
+        type: string
+        default: 'sqlite'
+      test-command:
+        description: 'Test command to run'
+        type: string
+        default: ''
+      coverage-driver:
+        description: 'Coverage driver (pcov, xdebug, none)'
+        type: string
+        default: 'pcov'
+      coverage-threshold:
+        description: 'Minimum coverage percentage (0 to disable)'
+        type: number
+        default: 0
+      post-coverage-comment:
+        description: 'Post coverage as PR comment'
+        type: boolean
+        default: true
+      php-extensions:
+        description: 'PHP extensions (comma-separated)'
+        type: string
+        default: 'mbstring, xml, ctype, iconv, intl, pdo_mysql, pdo_sqlite, pdo_pgsql, dom, filter, json, bcmath, sodium'
+
+jobs:
+  detect:
+    name: Detect Configuration
+    runs-on: ubuntu-latest
+    outputs:
+      has-tests: ${{ steps.detect.outputs.has_tests }}
+      has-frontend: ${{ steps.detect.outputs.has_frontend }}
+      test-runner: ${{ steps.detect.outputs.test_runner }}
+      package-manager: ${{ steps.detect.outputs.package_manager }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect project configuration
+        id: detect
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          # Check for tests
+          if [ -d "tests" ] && find tests -name "*.php" -type f | head -1 | grep -q .; then
+            echo "has_tests=true" >> $GITHUB_OUTPUT
+            echo "🧪 Tests found"
+          else
+            echo "has_tests=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No tests found"
+          fi
+
+          # Detect test runner
+          if [ -f "vendor/bin/pest" ] || grep -q '"pestphp/pest"' composer.json 2>/dev/null; then
+            echo "test_runner=pest" >> $GITHUB_OUTPUT
+            echo "🐛 Test runner: Pest"
+          else
+            echo "test_runner=phpunit" >> $GITHUB_OUTPUT
+            echo "🐛 Test runner: PHPUnit"
+          fi
+
+          # Check for frontend
+          if [ -f "package.json" ]; then
+            echo "has_frontend=true" >> $GITHUB_OUTPUT
+            echo "📦 Frontend detected"
+          else
+            echo "has_frontend=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Detect package manager
+          if [ -f "pnpm-lock.yaml" ]; then
+            echo "package_manager=pnpm" >> $GITHUB_OUTPUT
+          elif [ -f "yarn.lock" ]; then
+            echo "package_manager=yarn" >> $GITHUB_OUTPUT
+          else
+            echo "package_manager=npm" >> $GITHUB_OUTPUT
+          fi
+
+  lint-php:
+    name: Lint PHP
+    runs-on: ubuntu-latest
+    needs: detect
+    if: inputs.run-lint
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          tools: composer:v2
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ inputs.php-version }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            composer-${{ runner.os }}-${{ inputs.php-version }}-
+            composer-${{ runner.os }}-
+
+      - name: Install Composer dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Run Pint
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          echo "## 🔍 PHP Lint Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f "vendor/bin/pint" ]; then
+            ./vendor/bin/pint --test
+            echo "✅ Laravel Pint passed" >> $GITHUB_STEP_SUMMARY
+          elif [ -f "vendor/bin/php-cs-fixer" ]; then
+            ./vendor/bin/php-cs-fixer fix --dry-run --diff
+            echo "✅ PHP CS Fixer passed" >> $GITHUB_STEP_SUMMARY
+          elif [ -f "vendor/bin/phpcs" ]; then
+            ./vendor/bin/phpcs
+            echo "✅ PHP CodeSniffer passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ No PHP linter found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  lint-frontend:
+    name: Lint Frontend
+    runs-on: ubuntu-latest
+    needs: detect
+    if: inputs.run-frontend-lint && needs.detect.outputs.has-frontend == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Setup pnpm
+        if: needs.detect.outputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version || '9' }}
+
+      - name: Get cache directory
+        id: cache-dir
+        shell: bash
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) echo "dir=$(pnpm store path)" >> $GITHUB_OUTPUT ;;
+            yarn) echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT ;;
+            *) echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT ;;
+          esac
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.cache-dir.outputs.dir }}
+          key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json') }}
+          restore-keys: |
+            ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            *) npm ci ;;
+          esac
+
+      - name: Run ESLint
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          echo "## 🔍 Frontend Lint Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          PM="${{ needs.detect.outputs.package-manager }}"
+          if [ -f "node_modules/.bin/eslint" ]; then
+            case "$PM" in
+              pnpm) pnpm run lint 2>/dev/null || pnpm exec eslint . ;;
+              yarn) yarn lint 2>/dev/null || yarn eslint . ;;
+              *) npm run lint 2>/dev/null || npx eslint . ;;
+            esac
+            echo "✅ ESLint passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ ESLint not found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  typecheck:
+    name: TypeScript Check
+    runs-on: ubuntu-latest
+    needs: detect
+    if: inputs.run-typecheck && needs.detect.outputs.has-frontend == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Setup pnpm
+        if: needs.detect.outputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version || '9' }}
+
+      - name: Get cache directory
+        id: cache-dir
+        shell: bash
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) echo "dir=$(pnpm store path)" >> $GITHUB_OUTPUT ;;
+            yarn) echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT ;;
+            *) echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT ;;
+          esac
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.cache-dir.outputs.dir }}
+          key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json') }}
+          restore-keys: |
+            ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            *) npm ci ;;
+          esac
+
+      - name: Run TypeScript check
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          echo "## 🔍 TypeScript Check Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ ! -f "tsconfig.json" ]; then
+            echo "⚠️ No tsconfig.json found, skipping" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) pnpm run vue-tsc 2>/dev/null || pnpm run typecheck 2>/dev/null || pnpm exec vue-tsc --noEmit 2>/dev/null || pnpm exec tsc --noEmit ;;
+            yarn) yarn vue-tsc 2>/dev/null || yarn typecheck 2>/dev/null || yarn vue-tsc --noEmit 2>/dev/null || yarn tsc --noEmit ;;
+            *) npm run vue-tsc 2>/dev/null || npm run typecheck 2>/dev/null || npx vue-tsc --noEmit 2>/dev/null || npx tsc --noEmit ;;
+          esac
+          echo "✅ TypeScript check passed" >> $GITHUB_STEP_SUMMARY
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: detect
+    if: inputs.run-tests && needs.detect.outputs.has-tests == 'true'
+    services:
+      mysql:
+        image: ${{ inputs.database == 'mysql' && 'mysql:8.0' || '' }}
+        env:
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: testing
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+      postgres:
+        image: ${{ inputs.database == 'pgsql' && 'postgres:15' || '' }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: testing
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          extensions: ${{ inputs.php-extensions }}
+          coverage: ${{ inputs.run-coverage && inputs.coverage-driver || 'none' }}
+          tools: composer:v2
+
+      - name: Setup Node.js
+        if: inputs.build-assets && needs.detect.outputs.has-frontend == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Setup pnpm
+        if: inputs.build-assets && needs.detect.outputs.has-frontend == 'true' && needs.detect.outputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version || '9' }}
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ inputs.php-version }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            composer-${{ runner.os }}-${{ inputs.php-version }}-
+
+      - name: Install Composer dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Install Node dependencies
+        if: inputs.build-assets && needs.detect.outputs.has-frontend == 'true'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            *) npm ci ;;
+          esac
+
+      - name: Setup environment
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Setup SQLite database
+        if: inputs.database == 'sqlite'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          touch database/database.sqlite
+          # Create additional SQLite databases if configured
+          if grep -q "DB_FLAGS_DATABASE" .env.example 2>/dev/null; then
+            touch database/flags.sqlite
+          fi
+
+      - name: Configure MySQL
+        if: inputs.database == 'mysql'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
+          sed -i 's/DB_HOST=.*/DB_HOST=127.0.0.1/' .env
+          sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
+          sed -i 's/DB_DATABASE=.*/DB_DATABASE=testing/' .env
+          sed -i 's/DB_USERNAME=.*/DB_USERNAME=root/' .env
+          sed -i 's/DB_PASSWORD=.*/DB_PASSWORD=password/' .env
+
+      - name: Configure PostgreSQL
+        if: inputs.database == 'pgsql'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=pgsql/' .env
+          sed -i 's/DB_HOST=.*/DB_HOST=127.0.0.1/' .env
+          sed -i 's/DB_PORT=.*/DB_PORT=5432/' .env
+          sed -i 's/DB_DATABASE=.*/DB_DATABASE=testing/' .env
+          sed -i 's/DB_USERNAME=.*/DB_USERNAME=postgres/' .env
+          sed -i 's/DB_PASSWORD=.*/DB_PASSWORD=password/' .env
+
+      - name: Run migrations
+        working-directory: ${{ inputs.working-directory }}
+        run: php artisan migrate --force
+
+      - name: Build assets
+        if: inputs.build-assets && needs.detect.outputs.has-frontend == 'true'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) pnpm run build ;;
+            yarn) yarn build ;;
+            *) npm run build ;;
+          esac
+
+      - name: Run tests
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          echo "## 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          TEST_RUNNER="${{ needs.detect.outputs.test-runner }}"
+          COVERAGE_ARGS=""
+
+          if [ "${{ inputs.run-coverage }}" = "true" ]; then
+            COVERAGE_ARGS="--coverage --coverage-clover=coverage.xml"
+          fi
+
+          # Use custom test command if provided
+          if [ -n "${{ inputs.test-command }}" ]; then
+            ${{ inputs.test-command }} $COVERAGE_ARGS
+          elif [ "$TEST_RUNNER" = "pest" ]; then
+            ./vendor/bin/pest $COVERAGE_ARGS
+          else
+            php artisan test $COVERAGE_ARGS
+          fi
+
+          echo "✅ Tests passed" >> $GITHUB_STEP_SUMMARY
+
+      - name: Generate coverage report
+        if: inputs.run-coverage
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -f "coverage.xml" ]; then
+            # Parse coverage from clover format
+            COVERAGE=$(grep -oP 'line-rate="\K[^"]+' coverage.xml | head -1 || echo "0")
+            COVERAGE_PCT=$(echo "scale=1; $COVERAGE * 100" | bc)
+
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 📊 Coverage Report" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Total Coverage: ${COVERAGE_PCT}%**" >> $GITHUB_STEP_SUMMARY
+
+            # Check threshold
+            THRESHOLD=${{ inputs.coverage-threshold }}
+            if [ "$THRESHOLD" -gt 0 ]; then
+              if [ "$(echo "$COVERAGE_PCT < $THRESHOLD" | bc)" -eq 1 ]; then
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "⚠️ Coverage is below threshold of ${THRESHOLD}%" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "✅ Coverage meets threshold (${THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+
+            # Store for PR comment
+            echo "TOTAL_COVERAGE=$COVERAGE_PCT" >> $GITHUB_ENV
+          fi
+
+      - name: Comment PR with coverage
+        if: github.event_name == 'pull_request' && inputs.run-coverage && inputs.post-coverage-comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const coverage = process.env.TOTAL_COVERAGE || 'N/A';
+            const threshold = ${{ inputs.coverage-threshold }};
+
+            let status = '✅';
+            if (threshold > 0 && parseFloat(coverage) < threshold) {
+              status = '⚠️';
+            }
+
+            const body = `## 📊 Laravel Coverage Report
+
+            | Metric | Value |
+            |--------|-------|
+            | **Coverage** | **${coverage}%** ${status} |
+
+            ${threshold > 0 ? `> Threshold: ${threshold}%` : ''}
+
+            <details>
+            <summary>Details</summary>
+
+            Run \`./vendor/bin/pest --coverage\` locally to see detailed coverage.
+            </details>`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('📊 Laravel Coverage Report')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+            }
+
+      - name: Upload coverage artifact
+        if: inputs.run-coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: laravel-coverage
+          path: ${{ inputs.working-directory }}/coverage.xml
+          retention-days: 7
+          if-no-files-found: ignore
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [detect, lint-php, lint-frontend, typecheck, test]
+    if: always() && inputs.build-assets && needs.detect.outputs.has-frontend == 'true' && (needs.lint-php.result == 'success' || needs.lint-php.result == 'skipped') && (needs.lint-frontend.result == 'success' || needs.lint-frontend.result == 'skipped') && (needs.typecheck.result == 'success' || needs.typecheck.result == 'skipped') && (needs.test.result == 'success' || needs.test.result == 'skipped')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Setup pnpm
+        if: needs.detect.outputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version || '9' }}
+
+      - name: Get cache directory
+        id: cache-dir
+        shell: bash
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) echo "dir=$(pnpm store path)" >> $GITHUB_OUTPUT ;;
+            yarn) echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT ;;
+            *) echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT ;;
+          esac
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.cache-dir.outputs.dir }}
+          key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json') }}
+          restore-keys: |
+            ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            *) npm ci ;;
+          esac
+
+      - name: Build assets
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          echo "## 🔨 Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          PM="${{ needs.detect.outputs.package-manager }}"
+          case "$PM" in
+            pnpm) pnpm run build ;;
+            yarn) yarn build ;;
+            *) npm run build ;;
+          esac
+
+          # Report build size
+          if [ -d "public/build" ]; then
+            SIZE=$(du -sh public/build | cut -f1)
+            echo "✅ Build successful" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Build Size | $SIZE |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: laravel-build
+          path: ${{ inputs.working-directory }}/public/build
+          retention-days: 7
+          if-no-files-found: ignore
