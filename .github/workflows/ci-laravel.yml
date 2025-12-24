@@ -69,6 +69,10 @@ on:
         description: 'PHP extensions (comma-separated)'
         type: string
         default: 'mbstring, xml, ctype, iconv, intl, pdo_mysql, pdo_sqlite, pdo_pgsql, dom, filter, json, bcmath, sodium'
+      extra-databases:
+        description: 'Additional SQLite database files to create (space-separated, e.g., "flags.sqlite cache.sqlite")'
+        type: string
+        default: ''
 
 jobs:
   detect:
@@ -393,9 +397,12 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
         run: |
           touch database/database.sqlite
-          # Create additional SQLite databases if configured
-          if grep -q "DB_FLAGS_DATABASE" .env.example 2>/dev/null; then
-            touch database/flags.sqlite
+          # Create additional SQLite databases if specified
+          if [ -n "${{ inputs.extra-databases }}" ]; then
+            for db in ${{ inputs.extra-databases }}; do
+              touch "database/$db"
+              echo "Created database/$db"
+            done
           fi
 
       - name: Configure MySQL
