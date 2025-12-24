@@ -218,7 +218,7 @@ jobs:
           echo "## 🔍 Native Input Check" >> findings.md
           echo "" >> findings.md
 
-          SCRIPT_PATH=".sanity-scripts/scripts/check-native-inputs.cjs"
+          SCRIPT_PATH=".sanity-scripts/scripts/vue/check-native-inputs.cjs"
           if [ -f "$SCRIPT_PATH" ]; then
             OUTPUT=$(node "$SCRIPT_PATH" 2>&1) || true
             if [ -n "$OUTPUT" ]; then
@@ -255,7 +255,7 @@ jobs:
           echo "## 🔍 Vue Types Check" >> findings.md
           echo "" >> findings.md
 
-          SCRIPT_PATH=".sanity-scripts/scripts/check-vue-types.sh"
+          SCRIPT_PATH=".sanity-scripts/scripts/vue/check-vue-types.sh"
           if [ -f "$SCRIPT_PATH" ]; then
             OUTPUT=$(bash "$SCRIPT_PATH" 2>&1) || true
             if [ -n "$OUTPUT" ]; then
@@ -347,7 +347,7 @@ jobs:
             echo "### FormRequest Check" >> findings.md
             echo "" >> findings.md
 
-            SCRIPT_PATH=".sanity-scripts/scripts/check-missing-requests.php"
+            SCRIPT_PATH=".sanity-scripts/scripts/laravel/check-missing-requests.php"
             if [ -f "$SCRIPT_PATH" ]; then
               OUTPUT=$(php "$SCRIPT_PATH" 2>&1) || true
               if [ -n "$OUTPUT" ]; then
@@ -384,7 +384,7 @@ jobs:
             echo "### Column Mismatch Check" >> findings.md
             echo "" >> findings.md
 
-            SCRIPT_PATH=".sanity-scripts/scripts/check-column-mismatches.php"
+            SCRIPT_PATH=".sanity-scripts/scripts/laravel/check-column-mismatches.php"
             if [ -f "$SCRIPT_PATH" ]; then
               OUTPUT=$(php "$SCRIPT_PATH" 2>&1) || true
               if [ -n "$OUTPUT" ]; then
@@ -404,7 +404,7 @@ jobs:
             echo "### Relationship Conflict Check" >> findings.md
             echo "" >> findings.md
 
-            SCRIPT_PATH=".sanity-scripts/scripts/check-relationship-conflicts.php"
+            SCRIPT_PATH=".sanity-scripts/scripts/laravel/check-relationship-conflicts.php"
             if [ -f "$SCRIPT_PATH" ]; then
               OUTPUT=$(php "$SCRIPT_PATH" 2>&1) || true
               if [ -n "$OUTPUT" ]; then
