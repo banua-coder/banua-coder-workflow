@@ -39,6 +39,10 @@ on:
         description: 'Enable code coverage (xdebug, pcov, none)'
         type: string
         default: 'none'
+      extra-databases:
+        description: 'Additional SQLite database files to create (space-separated, e.g., "flags.sqlite")'
+        type: string
+        default: ''
 
 jobs:
   tests:
@@ -122,9 +126,12 @@ jobs:
         if: inputs.database == 'sqlite'
         run: |
           touch database/database.sqlite
-          # Create additional SQLite databases if configured
-          if grep -q "DB_FLAGS_DATABASE" .env.example; then
-            touch database/flags.sqlite
+          # Create additional SQLite databases if specified
+          if [ -n "${{ inputs.extra-databases }}" ]; then
+            for db in ${{ inputs.extra-databases }}; do
+              touch "database/$db"
+              echo "Created database/$db"
+            done
           fi
 
       - name: Run migrations
