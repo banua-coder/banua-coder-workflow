@@ -81,6 +81,7 @@ jobs:
     outputs:
       has-tests: ${{ steps.detect.outputs.has_tests }}
       has-frontend: ${{ steps.detect.outputs.has_frontend }}
+      has-wayfinder: ${{ steps.detect.outputs.has_wayfinder }}
       test-runner: ${{ steps.detect.outputs.test_runner }}
       package-manager: ${{ steps.detect.outputs.package_manager }}
     steps:
@@ -124,6 +125,14 @@ jobs:
             echo "package_manager=yarn" >> $GITHUB_OUTPUT
           else
             echo "package_manager=npm" >> $GITHUB_OUTPUT
+          fi
+
+          # Check for Wayfinder (Laravel route generator)
+          if [ -f "package.json" ] && grep -q '@laravel/vite-plugin-wayfinder' package.json 2>/dev/null; then
+            echo "has_wayfinder=true" >> $GITHUB_OUTPUT
+            echo "🧭 Wayfinder detected"
+          else
+            echo "has_wayfinder=false" >> $GITHUB_OUTPUT
           fi
 
   lint-php:
@@ -257,6 +266,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup PHP
+        if: needs.detect.outputs.has-wayfinder == 'true'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          tools: composer:v2
+
+      - name: Get Composer cache directory
+        if: needs.detect.outputs.has-wayfinder == 'true'
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache Composer dependencies
+        if: needs.detect.outputs.has-wayfinder == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ inputs.php-version }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            composer-${{ runner.os }}-${{ inputs.php-version }}-
+            composer-${{ runner.os }}-
+
+      - name: Install Composer dependencies
+        if: needs.detect.outputs.has-wayfinder == 'true'
+        working-directory: ${{ inputs.working-directory }}
+        run: composer install --prefer-dist --no-progress --no-interaction
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -300,6 +336,13 @@ jobs:
             yarn) yarn install --frozen-lockfile ;;
             *) npm ci ;;
           esac
+
+      - name: Generate routes (Wayfinder)
+        if: needs.detect.outputs.has-wayfinder == 'true'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          php artisan wayfinder:generate
+          echo "✅ Routes generated with Wayfinder" >> $GITHUB_STEP_SUMMARY
 
       - name: Run TypeScript check
         working-directory: ${{ inputs.working-directory }}
