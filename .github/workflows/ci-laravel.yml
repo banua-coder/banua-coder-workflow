@@ -191,11 +191,15 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Setup pnpm
-        if: needs.detect.outputs.package-manager == 'pnpm'
+      - name: Setup pnpm (with version)
+        if: needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version != ''
         uses: pnpm/action-setup@v4
         with:
-          version: ${{ inputs.pnpm-version || '9' }}
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup pnpm (from packageManager)
+        if: needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version == ''
+        uses: pnpm/action-setup@v4
 
       - name: Get cache directory
         id: cache-dir
@@ -258,11 +262,15 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Setup pnpm
-        if: needs.detect.outputs.package-manager == 'pnpm'
+      - name: Setup pnpm (with version)
+        if: needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version != ''
         uses: pnpm/action-setup@v4
         with:
-          version: ${{ inputs.pnpm-version || '9' }}
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup pnpm (from packageManager)
+        if: needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version == ''
+        uses: pnpm/action-setup@v4
 
       - name: Get cache directory
         id: cache-dir
@@ -353,11 +361,15 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Setup pnpm
-        if: inputs.build-assets && needs.detect.outputs.has-frontend == 'true' && needs.detect.outputs.package-manager == 'pnpm'
+      - name: Setup pnpm (with version)
+        if: inputs.build-assets && needs.detect.outputs.has-frontend == 'true' && needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version != ''
         uses: pnpm/action-setup@v4
         with:
-          version: ${{ inputs.pnpm-version || '9' }}
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup pnpm (from packageManager)
+        if: inputs.build-assets && needs.detect.outputs.has-frontend == 'true' && needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version == ''
+        uses: pnpm/action-setup@v4
 
       - name: Get Composer cache directory
         id: composer-cache
@@ -573,11 +585,15 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Setup pnpm
-        if: needs.detect.outputs.package-manager == 'pnpm'
+      - name: Setup pnpm (with version)
+        if: needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version != ''
         uses: pnpm/action-setup@v4
         with:
-          version: ${{ inputs.pnpm-version || '9' }}
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup pnpm (from packageManager)
+        if: needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version == ''
+        uses: pnpm/action-setup@v4
 
       - name: Get cache directory
         id: cache-dir
