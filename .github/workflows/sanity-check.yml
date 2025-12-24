@@ -210,23 +210,68 @@ jobs:
           echo "## 🔍 Native Input Check" >> findings.md
           echo "" >> findings.md
 
-          ISSUES=""
-          while IFS= read -r file; do
-            [ -z "$file" ] && continue
-            # Check for native input, select, textarea in template section
-            if grep -n '<input\|<select\|<textarea' "$file" 2>/dev/null | grep -v 'components/ui' | head -5 > /tmp/matches; then
-              if [ -s /tmp/matches ]; then
-                ISSUES="$ISSUES\n**$file:**\n\`\`\`\n$(cat /tmp/matches)\n\`\`\`\n"
-              fi
+          if [ -f "scripts/check-native-inputs.cjs" ]; then
+            OUTPUT=$(node scripts/check-native-inputs.cjs 2>&1) || true
+            if [ -n "$OUTPUT" ]; then
+              echo "$OUTPUT" >> findings.md
+            else
+              echo "✅ No native HTML inputs found outside ui components" >> findings.md
             fi
-          done < <(find resources/js/pages resources/js/components -name "*.vue" -type f 2>/dev/null | grep -v 'components/ui')
-
-          if [ -n "$ISSUES" ]; then
-            echo "Found native HTML inputs that should use shadcn-vue components:" >> findings.md
-            echo -e "$ISSUES" >> findings.md
-            echo "> **Suggestion:** Replace with components from \`@/components/ui\`" >> findings.md
           else
-            echo "✅ No native HTML inputs found outside ui components" >> findings.md
+            # Fallback to inline check
+            ISSUES=""
+            while IFS= read -r file; do
+              [ -z "$file" ] && continue
+              if grep -n '<input\|<select\|<textarea' "$file" 2>/dev/null | grep -v 'components/ui' | head -5 > /tmp/matches; then
+                if [ -s /tmp/matches ]; then
+                  ISSUES="$ISSUES\n**$file:**\n\`\`\`\n$(cat /tmp/matches)\n\`\`\`\n"
+                fi
+              fi
+            done < <(find resources/js/pages resources/js/components -name "*.vue" -type f 2>/dev/null | grep -v 'components/ui')
+
+            if [ -n "$ISSUES" ]; then
+              echo "Found native HTML inputs that should use shadcn-vue components:" >> findings.md
+              echo -e "$ISSUES" >> findings.md
+              echo "> **Suggestion:** Replace with components from \`@/components/ui\`" >> findings.md
+            else
+              echo "✅ No native HTML inputs found outside ui components" >> findings.md
+            fi
+          fi
+          echo "" >> findings.md
+
+      - name: Check for Vue type definitions
+        if: inputs.check-vue-types
+        id: vue-types
+        run: |
+          echo "## 🔍 Vue Types Check" >> findings.md
+          echo "" >> findings.md
+
+          if [ -f "scripts/check-vue-types.sh" ]; then
+            OUTPUT=$(bash scripts/check-vue-types.sh 2>&1) || true
+            if [ -n "$OUTPUT" ]; then
+              echo "$OUTPUT" >> findings.md
+            else
+              echo "✅ No type definitions found inside .vue files" >> findings.md
+            fi
+          else
+            # Fallback: Check for interface/type definitions in .vue files
+            ISSUES=""
+            while IFS= read -r file; do
+              [ -z "$file" ] && continue
+              if grep -n '^\s*\(export \)\?\(interface\|type\) ' "$file" 2>/dev/null | head -5 > /tmp/matches; then
+                if [ -s /tmp/matches ]; then
+                  ISSUES="$ISSUES\n**$file:**\n\`\`\`\n$(cat /tmp/matches)\n\`\`\`\n"
+                fi
+              fi
+            done < <(find resources/js -name "*.vue" -type f 2>/dev/null)
+
+            if [ -n "$ISSUES" ]; then
+              echo "Found type definitions inside .vue files (should be in separate .ts files):" >> findings.md
+              echo -e "$ISSUES" >> findings.md
+              echo "> **Suggestion:** Move type definitions to dedicated .ts files" >> findings.md
+            else
+              echo "✅ No type definitions found inside .vue files" >> findings.md
+            fi
           fi
           echo "" >> findings.md
 
@@ -284,25 +329,71 @@ jobs:
             echo "### FormRequest Check" >> findings.md
             echo "" >> findings.md
 
-            MISSING=""
-            for controller in app/Http/Controllers/*.php app/Http/Controllers/**/*.php; do
-              [ -f "$controller" ] || continue
-
-              # Look for store/update methods without type-hinted Request
-              if grep -l 'public function store\|public function update' "$controller" 2>/dev/null | head -1 > /dev/null; then
-                if grep -E 'function (store|update)\(Request \$request' "$controller" 2>/dev/null; then
-                  MISSING="$MISSING- \`$controller\`: Uses generic Request instead of FormRequest\n"
-                fi
+            if [ -f "scripts/check-missing-requests.php" ]; then
+              OUTPUT=$(php scripts/check-missing-requests.php 2>&1) || true
+              if [ -n "$OUTPUT" ]; then
+                echo "$OUTPUT" >> findings.md
+                HAS_ISSUES=true
+              else
+                echo "✅ All controllers use proper FormRequest classes" >> findings.md
               fi
-            done
-
-            if [ -n "$MISSING" ]; then
-              echo -e "$MISSING" >> findings.md
-              echo "" >> findings.md
-              echo "> **Suggestion:** Create dedicated FormRequest classes for validation" >> findings.md
-              HAS_ISSUES=true
             else
-              echo "✅ All controllers use proper FormRequest classes" >> findings.md
+              # Fallback to inline check
+              MISSING=""
+              for controller in app/Http/Controllers/*.php app/Http/Controllers/**/*.php; do
+                [ -f "$controller" ] || continue
+                if grep -l 'public function store\|public function update' "$controller" 2>/dev/null | head -1 > /dev/null; then
+                  if grep -E 'function (store|update)\(Request \$request' "$controller" 2>/dev/null; then
+                    MISSING="$MISSING- \`$controller\`: Uses generic Request instead of FormRequest\n"
+                  fi
+                fi
+              done
+
+              if [ -n "$MISSING" ]; then
+                echo -e "$MISSING" >> findings.md
+                echo "> **Suggestion:** Create dedicated FormRequest classes for validation" >> findings.md
+                HAS_ISSUES=true
+              else
+                echo "✅ All controllers use proper FormRequest classes" >> findings.md
+              fi
+            fi
+            echo "" >> findings.md
+          fi
+
+          # Check for column mismatches
+          if [ "${{ inputs.check-column-mismatches }}" = "true" ]; then
+            echo "### Column Mismatch Check" >> findings.md
+            echo "" >> findings.md
+
+            if [ -f "scripts/check-column-mismatches.php" ]; then
+              OUTPUT=$(php scripts/check-column-mismatches.php 2>&1) || true
+              if [ -n "$OUTPUT" ]; then
+                echo "$OUTPUT" >> findings.md
+                HAS_ISSUES=true
+              else
+                echo "✅ No column mismatches found" >> findings.md
+              fi
+            else
+              echo "⚠️ Script not found: scripts/check-column-mismatches.php" >> findings.md
+            fi
+            echo "" >> findings.md
+          fi
+
+          # Check for relationship conflicts
+          if [ "${{ inputs.check-relationship-conflicts }}" = "true" ]; then
+            echo "### Relationship Conflict Check" >> findings.md
+            echo "" >> findings.md
+
+            if [ -f "scripts/check-relationship-conflicts.php" ]; then
+              OUTPUT=$(php scripts/check-relationship-conflicts.php 2>&1) || true
+              if [ -n "$OUTPUT" ]; then
+                echo "$OUTPUT" >> findings.md
+                HAS_ISSUES=true
+              else
+                echo "✅ No relationship conflicts found" >> findings.md
+              fi
+            else
+              echo "⚠️ Script not found: scripts/check-relationship-conflicts.php" >> findings.md
             fi
             echo "" >> findings.md
           fi
