@@ -148,6 +148,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Download sanity scripts
+        uses: actions/checkout@v4
+        with:
+          repository: banua-coder/banua-coder-workflow
+          path: .sanity-scripts
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -210,8 +218,9 @@ jobs:
           echo "## 🔍 Native Input Check" >> findings.md
           echo "" >> findings.md
 
-          if [ -f "scripts/check-native-inputs.cjs" ]; then
-            OUTPUT=$(node scripts/check-native-inputs.cjs 2>&1) || true
+          SCRIPT_PATH=".sanity-scripts/scripts/check-native-inputs.cjs"
+          if [ -f "$SCRIPT_PATH" ]; then
+            OUTPUT=$(node "$SCRIPT_PATH" 2>&1) || true
             if [ -n "$OUTPUT" ]; then
               echo "$OUTPUT" >> findings.md
             else
@@ -246,8 +255,9 @@ jobs:
           echo "## 🔍 Vue Types Check" >> findings.md
           echo "" >> findings.md
 
-          if [ -f "scripts/check-vue-types.sh" ]; then
-            OUTPUT=$(bash scripts/check-vue-types.sh 2>&1) || true
+          SCRIPT_PATH=".sanity-scripts/scripts/check-vue-types.sh"
+          if [ -f "$SCRIPT_PATH" ]; then
+            OUTPUT=$(bash "$SCRIPT_PATH" 2>&1) || true
             if [ -n "$OUTPUT" ]; then
               echo "$OUTPUT" >> findings.md
             else
@@ -312,6 +322,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Download sanity scripts
+        uses: actions/checkout@v4
+        with:
+          repository: banua-coder/banua-coder-workflow
+          path: .sanity-scripts
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
+
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
@@ -329,8 +347,9 @@ jobs:
             echo "### FormRequest Check" >> findings.md
             echo "" >> findings.md
 
-            if [ -f "scripts/check-missing-requests.php" ]; then
-              OUTPUT=$(php scripts/check-missing-requests.php 2>&1) || true
+            SCRIPT_PATH=".sanity-scripts/scripts/check-missing-requests.php"
+            if [ -f "$SCRIPT_PATH" ]; then
+              OUTPUT=$(php "$SCRIPT_PATH" 2>&1) || true
               if [ -n "$OUTPUT" ]; then
                 echo "$OUTPUT" >> findings.md
                 HAS_ISSUES=true
@@ -365,8 +384,9 @@ jobs:
             echo "### Column Mismatch Check" >> findings.md
             echo "" >> findings.md
 
-            if [ -f "scripts/check-column-mismatches.php" ]; then
-              OUTPUT=$(php scripts/check-column-mismatches.php 2>&1) || true
+            SCRIPT_PATH=".sanity-scripts/scripts/check-column-mismatches.php"
+            if [ -f "$SCRIPT_PATH" ]; then
+              OUTPUT=$(php "$SCRIPT_PATH" 2>&1) || true
               if [ -n "$OUTPUT" ]; then
                 echo "$OUTPUT" >> findings.md
                 HAS_ISSUES=true
@@ -374,7 +394,7 @@ jobs:
                 echo "✅ No column mismatches found" >> findings.md
               fi
             else
-              echo "⚠️ Script not found: scripts/check-column-mismatches.php" >> findings.md
+              echo "⚠️ Script not found" >> findings.md
             fi
             echo "" >> findings.md
           fi
@@ -384,8 +404,9 @@ jobs:
             echo "### Relationship Conflict Check" >> findings.md
             echo "" >> findings.md
 
-            if [ -f "scripts/check-relationship-conflicts.php" ]; then
-              OUTPUT=$(php scripts/check-relationship-conflicts.php 2>&1) || true
+            SCRIPT_PATH=".sanity-scripts/scripts/check-relationship-conflicts.php"
+            if [ -f "$SCRIPT_PATH" ]; then
+              OUTPUT=$(php "$SCRIPT_PATH" 2>&1) || true
               if [ -n "$OUTPUT" ]; then
                 echo "$OUTPUT" >> findings.md
                 HAS_ISSUES=true
@@ -393,7 +414,7 @@ jobs:
                 echo "✅ No relationship conflicts found" >> findings.md
               fi
             else
-              echo "⚠️ Script not found: scripts/check-relationship-conflicts.php" >> findings.md
+              echo "⚠️ Script not found" >> findings.md
             fi
             echo "" >> findings.md
           fi
