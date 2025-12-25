@@ -171,6 +171,7 @@ function extractColumnsFromMigrationForTable(string $filePath, string $tableName
 
     $columns = [];
     $renamedColumns = [];
+    $droppedColumns = [];
 
     // Match Schema::table('tableName', function) for modifications - match multiple blocks
     $tablePattern = '/Schema::table\s*\(\s*[\'"]'.preg_quote($tableName).'[\'"]\s*,\s*function\s*\([^)]*\)\s*(?::\s*\w+\s*)?\{/';
@@ -207,10 +208,24 @@ function extractColumnsFromMigrationForTable(string $filePath, string $tableName
                     $renamedColumns[$rename[1]] = $rename[2];
                 }
             }
+
+            // Check for dropped columns: $table->dropColumn('col') or $table->dropColumn(['col1', 'col2'])
+            // Single column drop
+            if (preg_match_all('/\$table->dropColumn\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)/', $tableContent, $dropMatches)) {
+                $droppedColumns = array_merge($droppedColumns, $dropMatches[1]);
+            }
+            // Array of columns drop
+            if (preg_match_all('/\$table->dropColumn\s*\(\s*\[(.*?)\]\s*\)/s', $tableContent, $dropArrayMatches)) {
+                foreach ($dropArrayMatches[1] as $dropList) {
+                    if (preg_match_all('/[\'"]([^\'"]+)[\'"]/', $dropList, $dropColMatches)) {
+                        $droppedColumns = array_merge($droppedColumns, $dropColMatches[1]);
+                    }
+                }
+            }
         }
     }
 
-    return ['columns' => $columns, 'renames' => $renamedColumns];
+    return ['columns' => $columns, 'renames' => $renamedColumns, 'drops' => $droppedColumns];
 }
 
 /**
@@ -220,6 +235,7 @@ function getAllColumnsForTable(string $basePath, string $tableName): array
 {
     $columns = [];
     $renamedColumns = [];
+    $droppedColumns = [];
 
     // Get create migration
     $createMigrations = findFiles($basePath.'/database/migrations', "*_create_{$tableName}_table.php");
@@ -246,6 +262,7 @@ function getAllColumnsForTable(string $basePath, string $tableName): array
             $result = extractColumnsFromMigrationForTable($migration, $tableName);
             $columns = array_merge($columns, $result['columns']);
             $renamedColumns = array_merge($renamedColumns, $result['renames']);
+            $droppedColumns = array_merge($droppedColumns, $result['drops']);
         }
     }
 
@@ -254,6 +271,9 @@ function getAllColumnsForTable(string $basePath, string $tableName): array
         $columns = array_diff($columns, [$oldName]);
         $columns[] = $newName;
     }
+
+    // Remove dropped columns
+    $columns = array_diff($columns, $droppedColumns);
 
     // Remove common auto columns
     $autoColumns = ['id', 'created_at', 'updated_at', 'deleted_at'];
