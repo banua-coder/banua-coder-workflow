@@ -46,7 +46,7 @@ function extractMigrationColumns(string $filePath): array
 
     // Match table column definitions
     $patterns = [
-        '/\$table->(?:string|text|integer|bigInteger|unsignedInteger|unsignedBigInteger|unsignedTinyInteger|unsignedSmallInteger|tinyInteger|smallInteger|decimal|float|double|boolean|date|dateTime|timestamp|time|json|enum|foreignId)\s*\(\s*[\'"]([^"\']+)[\'"]/m',
+        '/\$table->(?:string|text|longText|mediumText|tinyText|char|integer|bigInteger|unsignedInteger|unsignedBigInteger|unsignedTinyInteger|unsignedSmallInteger|tinyInteger|smallInteger|mediumInteger|decimal|float|double|boolean|date|dateTime|dateTimeTz|timestamp|timestampTz|time|timeTz|year|json|jsonb|enum|foreignId|foreignUlid|foreignUuid|uuid|ulid|binary|ipAddress|macAddress|morphs|nullableMorphs|uuidMorphs|nullableUuidMorphs)\s*\(\s*[\'"]([^"\']+)[\'"]/m',
     ];
 
     foreach ($patterns as $pattern) {
@@ -174,7 +174,8 @@ function extractColumnsFromMigrationForTable(string $filePath, string $tableName
     $droppedColumns = [];
 
     // Match Schema::table('tableName', function) for modifications - match multiple blocks
-    $tablePattern = '/Schema::table\s*\(\s*[\'"]'.preg_quote($tableName).'[\'"]\s*,\s*function\s*\([^)]*\)\s*(?::\s*\w+\s*)?\{/';
+    // Also handles Schema::connection('..')->table() syntax
+    $tablePattern = '/Schema::(?:connection\s*\(\s*[\'"][^\'"]+[\'"]\s*\)\s*->\s*)?table\s*\(\s*[\'"]'.preg_quote($tableName).'[\'"]\s*,\s*function\s*\([^)]*\)\s*(?::\s*\w+\s*)?\{/';
 
     // Find all Schema::table blocks for this table
     if (preg_match_all($tablePattern, $upContent, $matches, PREG_OFFSET_CAPTURE)) {
@@ -196,7 +197,7 @@ function extractColumnsFromMigrationForTable(string $filePath, string $tableName
             $tableContent = substr($upContent, $startPos, $endPos - $startPos);
 
             // Match column definitions
-            $colPattern = '/\$table->(?:string|text|integer|bigInteger|unsignedInteger|unsignedBigInteger|unsignedTinyInteger|unsignedSmallInteger|tinyInteger|smallInteger|decimal|float|double|boolean|date|dateTime|timestamp|time|json|enum|foreignId)\s*\(\s*[\'"]([^"\']+)[\'"]/m';
+            $colPattern = '/\$table->(?:string|text|longText|mediumText|tinyText|char|integer|bigInteger|unsignedInteger|unsignedBigInteger|unsignedTinyInteger|unsignedSmallInteger|tinyInteger|smallInteger|mediumInteger|decimal|float|double|boolean|date|dateTime|dateTimeTz|timestamp|timestampTz|time|timeTz|year|json|jsonb|enum|foreignId|foreignUlid|foreignUuid|uuid|ulid|binary|ipAddress|macAddress|morphs|nullableMorphs|uuidMorphs|nullableUuidMorphs)\s*\(\s*[\'"]([^"\']+)[\'"]/m';
 
             if (preg_match_all($colPattern, $tableContent, $colMatches)) {
                 $columns = array_merge($columns, $colMatches[1]);
