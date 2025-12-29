@@ -4,9 +4,9 @@ on:
   workflow_call:
     inputs:
       flutter-version:
-        description: 'Flutter version (e.g., 3.38.4 or stable)'
+        description: 'Flutter version (e.g., 3.38.4). Leave empty to use channel.'
         type: string
-        default: 'stable'
+        default: ''
       flutter-channel:
         description: 'Flutter channel (stable, beta, dev)'
         type: string
@@ -151,7 +151,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ inputs.flutter-version }}
+          flutter-version: ${{ inputs.flutter-version || '' }}
           channel: ${{ inputs.flutter-channel }}
           cache: true
 
@@ -216,7 +216,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ inputs.flutter-version }}
+          flutter-version: ${{ inputs.flutter-version || '' }}
           channel: ${{ inputs.flutter-channel }}
           cache: true
 
@@ -263,7 +263,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ inputs.flutter-version }}
+          flutter-version: ${{ inputs.flutter-version || '' }}
           channel: ${{ inputs.flutter-channel }}
           cache: true
 
