@@ -276,6 +276,27 @@ jobs:
           channel: ${{ inputs.flutter-channel }}
           cache: true
 
+      - name: Restore pub cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.pub-cache
+            ${{ inputs.working-directory }}/.dart_tool
+            ${{ inputs.working-directory }}/.packages
+          key: pub-${{ runner.os }}-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: |
+            pub-${{ runner.os }}-
+
+      - name: Get dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ "${{ needs.detect.outputs.is-monorepo }}" = "true" ] && [ "${{ needs.detect.outputs.has-melos }}" = "true" ]; then
+            dart pub global activate melos
+            melos bootstrap
+          else
+            flutter pub get
+          fi
+
       - name: Check formatting
         working-directory: ${{ inputs.working-directory }}
         run: |
