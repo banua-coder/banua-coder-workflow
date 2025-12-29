@@ -137,10 +137,55 @@ jobs:
             echo "🔍 No Dart file changes"
           fi
 
+  setup:
+    name: Setup Flutter
+    runs-on: ubuntu-latest
+    needs: detect
+    outputs:
+      flutter-version: ${{ steps.flutter.outputs.FLUTTER_VERSION }}
+      cache-key: ${{ steps.cache-key.outputs.key }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        id: flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter-version || '' }}
+          channel: ${{ inputs.flutter-channel }}
+          cache: true
+
+      - name: Generate cache key
+        id: cache-key
+        run: |
+          FLUTTER_VERSION=$(flutter --version --machine | grep -o '"frameworkVersion":"[^"]*"' | cut -d'"' -f4)
+          echo "key=flutter-${{ runner.os }}-${FLUTTER_VERSION}" >> $GITHUB_OUTPUT
+          echo "FLUTTER_VERSION=${FLUTTER_VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Get dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ "${{ needs.detect.outputs.is-monorepo }}" = "true" ] && [ "${{ needs.detect.outputs.has-melos }}" = "true" ]; then
+            dart pub global activate melos
+            melos bootstrap
+          else
+            flutter pub get
+          fi
+
+      - name: Cache pub dependencies
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.pub-cache
+            ${{ inputs.working-directory }}/.dart_tool
+            ${{ inputs.working-directory }}/.packages
+          key: pub-${{ runner.os }}-${{ hashFiles('**/pubspec.lock') }}
+
   analyze:
     name: Static Analysis
     runs-on: ubuntu-latest
-    needs: detect
+    needs: [detect, setup]
     if: inputs.run-analyze
     steps:
       - name: Checkout
@@ -154,6 +199,17 @@ jobs:
           flutter-version: ${{ inputs.flutter-version || '' }}
           channel: ${{ inputs.flutter-channel }}
           cache: true
+
+      - name: Restore pub cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.pub-cache
+            ${{ inputs.working-directory }}/.dart_tool
+            ${{ inputs.working-directory }}/.packages
+          key: pub-${{ runner.os }}-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: |
+            pub-${{ runner.os }}-
 
       - name: Get dependencies
         working-directory: ${{ inputs.working-directory }}
@@ -207,7 +263,7 @@ jobs:
   format:
     name: Code Formatting
     runs-on: ubuntu-latest
-    needs: detect
+    needs: [detect, setup]
     if: inputs.run-format
     steps:
       - name: Checkout
@@ -252,8 +308,8 @@ jobs:
   test:
     name: Unit Tests
     runs-on: ubuntu-latest
-    needs: [detect, analyze, format]
-    if: always() && inputs.run-tests && needs.detect.outputs.has-tests == 'true' && (needs.analyze.result == 'success' || needs.analyze.result == 'skipped') && (needs.format.result == 'success' || needs.format.result == 'skipped')
+    needs: [detect, setup, analyze, format]
+    if: always() && inputs.run-tests && needs.detect.outputs.has-tests == 'true' && needs.setup.result == 'success' && (needs.analyze.result == 'success' || needs.analyze.result == 'skipped') && (needs.format.result == 'success' || needs.format.result == 'skipped')
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -266,6 +322,17 @@ jobs:
           flutter-version: ${{ inputs.flutter-version || '' }}
           channel: ${{ inputs.flutter-channel }}
           cache: true
+
+      - name: Restore pub cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.pub-cache
+            ${{ inputs.working-directory }}/.dart_tool
+            ${{ inputs.working-directory }}/.packages
+          key: pub-${{ runner.os }}-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: |
+            pub-${{ runner.os }}-
 
       - name: Get dependencies
         working-directory: ${{ inputs.working-directory }}
@@ -407,7 +474,7 @@ jobs:
   size-guard:
     name: File Size Check
     runs-on: ubuntu-latest
-    needs: detect
+    needs: [detect, setup]
     if: inputs.run-size-guard
     steps:
       - name: Checkout
