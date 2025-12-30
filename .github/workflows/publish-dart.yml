@@ -4,9 +4,13 @@ on:
   workflow_call:
     inputs:
       flutter-version:
-        description: 'Flutter version'
+        description: 'Flutter version (leave empty to use channel only)'
         type: string
-        default: '3.27.2'
+        default: ''
+      flutter-channel:
+        description: 'Flutter channel (stable, beta, dev, master)'
+        type: string
+        default: 'stable'
       use-flutter:
         description: 'Use Flutter SDK instead of Dart SDK'
         type: boolean
@@ -45,8 +49,8 @@ jobs:
         if: inputs.use-flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ inputs.flutter-version }}
-          channel: stable
+          flutter-version: ${{ inputs.flutter-version || '' }}
+          channel: ${{ inputs.flutter-channel }}
           cache: true
 
       - name: Setup Dart
