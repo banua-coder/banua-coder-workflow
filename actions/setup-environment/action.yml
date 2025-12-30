@@ -20,9 +20,13 @@ inputs:
     required: false
     default: '8.2'
   flutter-version:
-    description: 'Flutter version'
+    description: 'Flutter version (leave empty to use channel only)'
     required: false
-    default: '3.27.2'
+    default: ''
+  flutter-channel:
+    description: 'Flutter channel (stable, beta, dev, master)'
+    required: false
+    default: 'stable'
   java-version:
     description: 'Java version (for Android)'
     required: false
@@ -126,8 +130,8 @@ runs:
       if: contains(fromJSON('["flutter-app", "flutter-package"]'), steps.detect.outputs.project_type)
       uses: subosito/flutter-action@v2
       with:
-        flutter-version: ${{ inputs.flutter-version }}
-        channel: stable
+        flutter-version: ${{ inputs.flutter-version || '' }}
+        channel: ${{ inputs.flutter-channel }}
         cache: true
 
     - name: Setup Dart

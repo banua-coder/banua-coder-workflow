@@ -36,9 +36,13 @@ on:
         type: string
         default: '8.3'
       flutter-version:
-        description: 'Flutter version'
+        description: 'Flutter version (leave empty to use channel only)'
         type: string
-        default: '3.38.4'
+        default: ''
+      flutter-channel:
+        description: 'Flutter channel (stable, beta, dev, master)'
+        type: string
+        default: 'stable'
     secrets:
       GH_PAT:
         description: 'GitHub Personal Access Token (for creating PRs and pushing)'
@@ -88,6 +92,7 @@ jobs:
           pnpm-version: ${{ inputs.pnpm-version }}
           php-version: ${{ inputs.php-version }}
           flutter-version: ${{ inputs.flutter-version }}
+          flutter-channel: ${{ inputs.flutter-channel }}
 
       - name: Validate and update version
         uses: banua-coder/banua-coder-workflow/actions/bump-version@main
@@ -175,6 +180,8 @@ jobs:
         with:
           project-type: ${{ inputs.project-type }}
           pnpm-version: ${{ inputs.pnpm-version }}
+          flutter-version: ${{ inputs.flutter-version }}
+          flutter-channel: ${{ inputs.flutter-channel }}
 
       - name: Bump version
         uses: banua-coder/banua-coder-workflow/actions/bump-version@main
@@ -246,6 +253,8 @@ jobs:
         with:
           project-type: ${{ inputs.project-type }}
           pnpm-version: ${{ inputs.pnpm-version }}
+          flutter-version: ${{ inputs.flutter-version }}
+          flutter-channel: ${{ inputs.flutter-channel }}
 
       # For packages: Generate changelog BEFORE tagging
       - name: Generate changelog (pre-tag for packages)
