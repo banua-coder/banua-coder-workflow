@@ -43,6 +43,14 @@ on:
         description: 'Flutter channel (stable, beta, dev, master)'
         type: string
         default: 'stable'
+      version-files:
+        description: 'Comma-separated list of version files to update (auto-detected if empty)'
+        type: string
+        default: ''
+      changelog-copy-paths:
+        description: 'Comma-separated list of additional paths to copy CHANGELOG.md to after generation'
+        type: string
+        default: ''
     secrets:
       GH_PAT:
         description: 'GitHub Personal Access Token (for creating PRs and pushing)'
@@ -98,6 +106,7 @@ jobs:
         uses: banua-coder/banua-coder-workflow/actions/bump-version@main
         with:
           version: ${{ steps.extract-version.outputs.version }}
+          files: ${{ inputs.version-files }}
           commit: 'true'
           commit-message: 'chore: bump version to {version}'
 
@@ -187,6 +196,7 @@ jobs:
         uses: banua-coder/banua-coder-workflow/actions/bump-version@main
         with:
           version: ${{ steps.next-version.outputs.next_version }}
+          files: ${{ inputs.version-files }}
           commit: 'true'
           commit-message: 'chore: bump version to {version} for next development cycle'
 
@@ -265,6 +275,24 @@ jobs:
           format: ${{ inputs.changelog-format }}
           commit: 'true'
 
+      - name: Copy changelog to additional paths (packages)
+        if: inputs.changelog-copy-paths != '' && contains(fromJSON('["npm-package", "dart-package", "flutter-package", "php-package"]'), inputs.project-type)
+        run: |
+          COPY_PATHS="${{ inputs.changelog-copy-paths }}"
+          IFS=',' read -ra PATHS <<< "$COPY_PATHS"
+          for target in "${PATHS[@]}"; do
+            target=$(echo "$target" | xargs)
+            if [ -n "$target" ]; then
+              mkdir -p "$(dirname "$target")"
+              cp CHANGELOG.md "$target"
+              echo "📋 Copied CHANGELOG.md to $target"
+            fi
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit --amend --no-edit
+
       - name: Push changelog (packages)
         if: contains(fromJSON('["npm-package", "dart-package", "flutter-package", "php-package"]'), inputs.project-type)
         run: git push origin HEAD
@@ -312,6 +340,24 @@ jobs:
           version: ${{ needs.on-merged.outputs.version }}
           format: ${{ inputs.changelog-format }}
           commit: 'true'
+
+      - name: Copy changelog to additional paths (web apps)
+        if: inputs.changelog-copy-paths != '' && contains(fromJSON('["web-app", "mobile-app", "auto"]'), inputs.project-type)
+        run: |
+          COPY_PATHS="${{ inputs.changelog-copy-paths }}"
+          IFS=',' read -ra PATHS <<< "$COPY_PATHS"
+          for target in "${PATHS[@]}"; do
+            target=$(echo "$target" | xargs)
+            if [ -n "$target" ]; then
+              mkdir -p "$(dirname "$target")"
+              cp CHANGELOG.md "$target"
+              echo "📋 Copied CHANGELOG.md to $target"
+            fi
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit --amend --no-edit
 
       - name: Push changelog (web apps)
         if: contains(fromJSON('["web-app", "mobile-app", "auto"]'), inputs.project-type)
