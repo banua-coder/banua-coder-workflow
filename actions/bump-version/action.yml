@@ -104,7 +104,7 @@ runs:
               jq --arg v "$VERSION" '.version = $v' "$file" > tmp.json && mv tmp.json "$file"
               FILES_UPDATED="$FILES_UPDATED,$file"
               ;;
-            pubspec.yaml)
+            *pubspec.yaml)
               PREVIOUS_VERSION=$(grep '^version:' "$file" | sed 's/version: //' | cut -d'+' -f1)
               # Preserve build number if exists
               if grep -q '+' <<< "$(grep '^version:' "$file")"; then
