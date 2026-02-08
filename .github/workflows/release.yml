@@ -74,6 +74,9 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
 
+      - name: Configure git credentials
+        run: git remote set-url origin https://x-access-token:${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+
       - name: Extract version from branch name
         id: extract-version
         run: |
@@ -111,22 +114,18 @@ jobs:
           commit-message: 'chore: bump version to {version}'
 
       - name: Push version update
-        run: |
-          git remote set-url origin https://x-access-token:${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-          git push origin HEAD
+        run: git push origin HEAD
 
       - name: Create PR to main
         run: |
-          VERSION="${{ steps.extract-version.outputs.version }}"
-          BRANCH_TYPE="${{ steps.extract-version.outputs.branch_type }}"
           BRANCH_NAME="${GITHUB_REF#refs/heads/}"
 
           # Check if PR already exists
-          EXISTING_PR=$(gh pr list --head "$BRANCH_NAME" --base "${{ inputs.main-branch }}" --json number --jq '.[0].number')
+          EXISTING_PR=$(gh pr list --head "$BRANCH_NAME" --base "$MAIN_BRANCH" --json number --jq '.[0].number')
 
           if [ -z "$EXISTING_PR" ]; then
             gh pr create \
-              --base "${{ inputs.main-branch }}" \
+              --base "$MAIN_BRANCH" \
               --head "$BRANCH_NAME" \
               --title "$BRANCH_TYPE: $VERSION" \
               --body "## $BRANCH_TYPE $VERSION
@@ -140,12 +139,15 @@ jobs:
 
             ---
             🤖 *This PR was automatically created by the release workflow.*"
-            echo "✅ Created PR to ${{ inputs.main-branch }}"
+            echo "✅ Created PR to $MAIN_BRANCH"
           else
             echo "PR #$EXISTING_PR already exists"
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.extract-version.outputs.version }}
+          BRANCH_TYPE: ${{ steps.extract-version.outputs.branch_type }}
+          MAIN_BRANCH: ${{ inputs.main-branch }}
 
   # ============================================
   # JOB 2: Create bump-next-version PR (Release only)
@@ -162,6 +164,9 @@ jobs:
           ref: ${{ inputs.develop-branch }}
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Configure git credentials
+        run: git remote set-url origin https://x-access-token:${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
 
       - name: Calculate next version
         id: next-version
@@ -204,15 +209,14 @@ jobs:
           NEXT_VERSION="${{ steps.next-version.outputs.next_version }}"
           BRANCH_NAME="chore/bump-next-version"
 
-          git remote set-url origin https://x-access-token:${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           git push origin "$BRANCH_NAME" --force
 
           # Check if PR exists
-          EXISTING_PR=$(gh pr list --head "$BRANCH_NAME" --base "${{ inputs.develop-branch }}" --json number --jq '.[0].number')
+          EXISTING_PR=$(gh pr list --head "$BRANCH_NAME" --base "$DEVELOP_BRANCH" --json number --jq '.[0].number')
 
           if [ -z "$EXISTING_PR" ]; then
             gh pr create \
-              --base "${{ inputs.develop-branch }}" \
+              --base "$DEVELOP_BRANCH" \
               --head "$BRANCH_NAME" \
               --title "chore: bump version to $NEXT_VERSION" \
               --body "## Bump Next Development Version
@@ -224,6 +228,7 @@ jobs:
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          DEVELOP_BRANCH: ${{ inputs.develop-branch }}
 
   # ============================================
   # JOB 3: On PR Merged to Main
@@ -233,18 +238,22 @@ jobs:
     if: |
       github.event_name == 'pull_request' &&
       github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
       (startsWith(github.event.pull_request.head.ref, 'release/') || startsWith(github.event.pull_request.head.ref, 'hotfix/'))
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.extract-version.outputs.version }}
       tag: ${{ steps.create-tag.outputs.tag }}
     steps:
-      - name: Checkout
+      - name: Checkout main branch
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.main-branch }}
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Configure git credentials
+        run: git remote set-url origin https://x-access-token:${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
 
       - name: Extract version
         id: extract-version
@@ -278,7 +287,6 @@ jobs:
       - name: Copy changelog to additional paths (packages)
         if: inputs.changelog-copy-paths != '' && contains(fromJSON('["npm-package", "dart-package", "flutter-package", "php-package"]'), inputs.project-type)
         run: |
-          COPY_PATHS="${{ inputs.changelog-copy-paths }}"
           IFS=',' read -ra PATHS <<< "$COPY_PATHS"
           for target in "${PATHS[@]}"; do
             target=$(echo "$target" | xargs)
@@ -291,13 +299,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git diff --cached --quiet || git commit --amend --no-edit
+          git diff --cached --quiet || git commit -m "docs: copy changelog to package directories"
+        env:
+          COPY_PATHS: ${{ inputs.changelog-copy-paths }}
 
       - name: Push changelog (packages)
         if: contains(fromJSON('["npm-package", "dart-package", "flutter-package", "php-package"]'), inputs.project-type)
-        run: |
-          git remote set-url origin https://x-access-token:${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-          git push origin HEAD
+        run: git push origin HEAD:${{ inputs.main-branch }}
 
       - name: Create and push tag
         id: create-tag
@@ -308,7 +316,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git remote set-url origin https://x-access-token:${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           git tag -a "$TAG" -m "Release $VERSION"
           git push origin "$TAG"
 
@@ -316,19 +323,22 @@ jobs:
           echo "🏷️ Created tag: $TAG"
 
   # ============================================
-  # JOB 4: Post-Deploy Tasks (triggered by tag)
+  # JOB 4: Post-Deploy Tasks
   # ============================================
   post-deploy:
     name: Post-Deploy Tasks
     needs: on-merged
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout main branch
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.main-branch }}
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Configure git credentials
+        run: git remote set-url origin https://x-access-token:${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
 
       # For web apps: Generate changelog AFTER tagging
       - name: Generate changelog (post-tag for web apps)
@@ -343,7 +353,6 @@ jobs:
       - name: Copy changelog to additional paths (web apps)
         if: inputs.changelog-copy-paths != '' && contains(fromJSON('["web-app", "mobile-app", "auto"]'), inputs.project-type)
         run: |
-          COPY_PATHS="${{ inputs.changelog-copy-paths }}"
           IFS=',' read -ra PATHS <<< "$COPY_PATHS"
           for target in "${PATHS[@]}"; do
             target=$(echo "$target" | xargs)
@@ -356,13 +365,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git diff --cached --quiet || git commit --amend --no-edit
+          git diff --cached --quiet || git commit -m "docs: copy changelog to package directories"
+        env:
+          COPY_PATHS: ${{ inputs.changelog-copy-paths }}
 
       - name: Push changelog (web apps)
         if: contains(fromJSON('["web-app", "mobile-app", "auto"]'), inputs.project-type)
-        run: |
-          git remote set-url origin https://x-access-token:${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-          git push origin HEAD
+        run: git push origin HEAD:${{ inputs.main-branch }}
 
       - name: Create back-merge PR
         uses: banua-coder/banua-coder-workflow/actions/back-merge@main
@@ -377,6 +386,9 @@ jobs:
         id: get-changelog
         run: |
           VERSION="${{ needs.on-merged.outputs.version }}"
+
+          # Pull latest to ensure we have the changelog from Job 3
+          git pull origin "$MAIN_BRANCH" --rebase || true
 
           # Extract this version's changelog
           if [ -f "CHANGELOG.md" ]; then
@@ -394,15 +406,17 @@ jobs:
           echo "notes<<EOF" >> $GITHUB_OUTPUT
           echo "$NOTES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+        env:
+          MAIN_BRANCH: ${{ inputs.main-branch }}
 
       - name: Create GitHub Release
         run: |
-          VERSION="${{ needs.on-merged.outputs.version }}"
-          TAG="${{ needs.on-merged.outputs.tag }}"
-
           gh release create "$TAG" \
             --title "Release $VERSION" \
-            --notes "${{ steps.get-changelog.outputs.notes }}" \
+            --notes "$RELEASE_NOTES" \
             --latest
         env:
           GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.on-merged.outputs.version }}
+          TAG: ${{ needs.on-merged.outputs.tag }}
+          RELEASE_NOTES: ${{ steps.get-changelog.outputs.notes }}
