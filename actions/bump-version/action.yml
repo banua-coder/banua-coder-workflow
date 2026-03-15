@@ -1,5 +1,5 @@
 name: 'Bump Version'
-description: 'Bump version in project files (package.json, pubspec.yaml, composer.json, etc.)'
+description: 'Bump version in project files (package.json, pubspec.yaml, composer.json, go.mod, etc.)'
 author: 'Banua Coder'
 
 inputs:
@@ -50,6 +50,26 @@ runs:
         if [ -z "$FILES" ]; then
           FILES=""
           IS_PHP_PROJECT=false
+          IS_GO_PROJECT=false
+
+          # Check if it's a Go project
+          if [ -f "go.mod" ]; then
+            IS_GO_PROJECT=true
+            # If .version-config.yml exists, delegate to update-version.sh script
+            if [ -f ".version-config.yml" ] && [ -f "scripts/update-version.sh" ]; then
+              echo "🐹 Go project with .version-config.yml detected — using update-version.sh"
+              chmod +x scripts/update-version.sh
+              scripts/update-version.sh "$VERSION"
+              FILES_UPDATED="(via scripts/update-version.sh)"
+              echo "version=$VERSION" >> $GITHUB_OUTPUT
+              echo "previous_version=" >> $GITHUB_OUTPUT
+              echo "files_updated=$FILES_UPDATED" >> $GITHUB_OUTPUT
+              echo "✅ Version bumped to $VERSION"
+              exit 0
+            fi
+            # Fallback: update common Go version patterns directly
+            FILES="go:auto"
+          fi
 
           # Check if it's a PHP/Laravel project
           if [ -f "config/app.php" ] || ([ -f "composer.json" ] && jq -e '.type == "project"' composer.json > /dev/null 2>&1); then
@@ -57,8 +77,8 @@ runs:
             [ -f "config/app.php" ] && FILES="$FILES,config/app.php"
           fi
 
-          # Only add package.json if NOT a PHP project
-          if [ "$IS_PHP_PROJECT" = false ] && [ -f "package.json" ]; then
+          # Only add package.json if NOT a PHP or Go project
+          if [ "$IS_PHP_PROJECT" = false ] && [ "$IS_GO_PROJECT" = false ] && [ -f "package.json" ]; then
             FILES="$FILES,package.json"
           fi
 
@@ -82,6 +102,32 @@ runs:
           echo "Processing $file..."
 
           case "$file" in
+            go:auto)
+              # Go project fallback — update common version patterns in Go files
+              echo "🐹 Updating Go version files..."
+              # cmd/main.go — Swagger @version annotation
+              if [ -f "cmd/main.go" ]; then
+                PREVIOUS_VERSION=$(grep -oP '@version\s+\K[0-9]+\.[0-9]+\.[0-9]+' cmd/main.go | head -1)
+                perl -i -pe "s|(\@version\s+)[0-9]+\.[0-9]+\.[0-9]+|\${1}$VERSION|g" cmd/main.go
+                echo "✅ Updated cmd/main.go"
+                FILES_UPDATED="$FILES_UPDATED,cmd/main.go"
+              fi
+              # internal/handler — "version": "x.y.z" string literals
+              for handler_file in $(grep -rl '"version":\s*"[0-9]\+\.[0-9]\+\.[0-9]\+"' internal/ 2>/dev/null); do
+                if [[ "$handler_file" != *_test.go ]]; then
+                  perl -i -pe 's|("version":\s*")[0-9]+\.[0-9]+\.[0-9]+|${1}'"$VERSION"'|g' "$handler_file"
+                  echo "✅ Updated $handler_file"
+                  FILES_UPDATED="$FILES_UPDATED,$handler_file"
+                fi
+              done
+              # *_test.go — assert.Equal version strings
+              for test_file in $(grep -rl 'assert\.Equal(t, "[0-9]\+\.[0-9]\+\.[0-9]\+"' internal/ 2>/dev/null); do
+                perl -i -pe 's|(assert\.Equal\(t,\s*")[0-9]+\.[0-9]+\.[0-9]+|${1}'"$VERSION"'|g' "$test_file"
+                echo "✅ Updated $test_file"
+                FILES_UPDATED="$FILES_UPDATED,$test_file"
+              done
+              continue
+              ;;
             config/app.php)
               # Laravel config/app.php - handles both direct values and env() patterns
               # Pattern 1: 'version' => env('APP_VERSION', 'x.x.x')
