@@ -27,6 +27,14 @@ on:
         description: 'PHP version'
         type: string
         default: '8.2'
+      backup-enabled:
+        description: 'Enable backup before deployment for rollback support'
+        type: boolean
+        default: true
+      backup-keep:
+        description: 'Number of backups to keep (0 = keep all)'
+        type: number
+        default: 3
     secrets:
       SSH_HOST:
         description: 'SSH host'
@@ -65,15 +73,69 @@ on:
       status:
         description: 'Deployment status'
         value: ${{ jobs.deploy.outputs.status }}
+      backup-path:
+        description: 'Path to the backup created before deployment'
+        value: ${{ jobs.backup.outputs.backup-path }}
 
 jobs:
+  # ──────────────────────────────────────────────────────────────────
+  # BACKUP — snapshot current state before deploying (SSH only)
+  # Skipped for cloud providers (Vercel/Netlify/Firebase handle their own versioning)
+  # ──────────────────────────────────────────────────────────────────
+  backup:
+    name: Backup
+    runs-on: ubuntu-latest
+    if: inputs.backup-enabled && inputs.deploy-provider == 'ssh'
+    outputs:
+      backup-path: ${{ steps.backup.outputs.backup-path }}
+    steps:
+      - name: Create remote backup
+        id: backup
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            DEPLOY_PATH="${{ inputs.deploy-path }}"
+            BACKUPS_DIR="$(dirname "$DEPLOY_PATH")/.backups"
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            BACKUP_PATH="$BACKUPS_DIR/${TIMESTAMP}_$(basename "$DEPLOY_PATH")"
+
+            mkdir -p "$BACKUPS_DIR"
+
+            if [ -d "$DEPLOY_PATH" ]; then
+              cp -a "$DEPLOY_PATH" "$BACKUP_PATH"
+              echo "✅ Backup created: $BACKUP_PATH"
+              echo "backup-path=$BACKUP_PATH" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ Deploy path does not exist yet — skipping backup"
+              echo "backup-path=" >> $GITHUB_OUTPUT
+            fi
+
+            # Prune old backups
+            KEEP=${{ inputs.backup-keep }}
+            if [ "$KEEP" -gt 0 ]; then
+              BACKUP_COUNT=$(ls -d "$BACKUPS_DIR"/*_"$(basename "$DEPLOY_PATH")" 2>/dev/null | wc -l)
+              if [ "$BACKUP_COUNT" -gt "$KEEP" ]; then
+                ls -dt "$BACKUPS_DIR"/*_"$(basename "$DEPLOY_PATH")" | tail -n +"$((KEEP + 1))" | xargs rm -rf
+                echo "🧹 Pruned old backups (kept $KEEP)"
+              fi
+            fi
+
+  # ──────────────────────────────────────────────────────────────────
+  # DEPLOY — main deployment job
+  # ──────────────────────────────────────────────────────────────────
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
+    needs: backup
+    if: always() && (needs.backup.result == 'success' || needs.backup.result == 'skipped')
     environment: ${{ inputs.environment }}
     outputs:
-      deploy-url: ${{ steps.deploy.outputs.url }}
-      status: ${{ steps.deploy.outputs.status }}
+      deploy-url: ${{ steps.set-outputs.outputs.url }}
+      status: ${{ steps.set-outputs.outputs.status }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -177,7 +239,7 @@ jobs:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 
       - name: Set outputs
-        id: deploy
+        id: set-outputs
         run: |
           PROVIDER="${{ inputs.deploy-provider }}"
 
@@ -195,3 +257,63 @@ jobs:
 
           echo "status=success" >> $GITHUB_OUTPUT
           echo "✅ Deployment completed"
+
+  # ──────────────────────────────────────────────────────────────────
+  # ROLLBACK — restore backup when deploy job fails (SSH only)
+  # ──────────────────────────────────────────────────────────────────
+  rollback:
+    name: Rollback
+    runs-on: ubuntu-latest
+    needs: [backup, deploy]
+    if: |
+      always() &&
+      needs.deploy.result == 'failure' &&
+      needs.backup.result == 'success' &&
+      needs.backup.outputs.backup-path != ''
+    steps:
+      - name: Restore backup
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            DEPLOY_PATH="${{ inputs.deploy-path }}"
+            BACKUP_PATH="${{ needs.backup.outputs.backup-path }}"
+
+            echo "⚠️ Deployment failed — rolling back to: $BACKUP_PATH"
+
+            if [ -d "$BACKUP_PATH" ]; then
+              # Swap: remove current (broken) and restore backup
+              rm -rf "$DEPLOY_PATH"
+              cp -a "$BACKUP_PATH" "$DEPLOY_PATH"
+              echo "✅ Rollback successful: restored from $BACKUP_PATH"
+
+              # Re-run Laravel optimizations if applicable
+              if [ -f "$DEPLOY_PATH/artisan" ]; then
+                cd "$DEPLOY_PATH"
+                php artisan config:cache
+                php artisan route:cache
+                php artisan view:cache
+                php artisan optimize
+                echo "✅ Laravel caches rebuilt"
+              fi
+            else
+              echo "❌ Backup not found at $BACKUP_PATH — cannot rollback!"
+              exit 1
+            fi
+
+      - name: Annotate rollback
+        run: |
+          echo "## ⚠️ Deployment Failed — Rolled Back" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Deployment of \`${{ github.ref_name }}\` failed." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Backup restored** | \`${{ needs.backup.outputs.backup-path }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Tag** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> Production has been restored to the previous working state." >> $GITHUB_STEP_SUMMARY
+          exit 1
