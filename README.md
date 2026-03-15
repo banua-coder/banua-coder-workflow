@@ -11,6 +11,8 @@ Reusable GitHub Actions workflows for Git Flow release management across multipl
 - 📱 **Mobile Deployment** - Android and iOS Flutter apps
 - 🔄 **Back-merge** - Automatic PR to sync changes back to develop
 - 🧹 **Sanity Checks** - Code quality checks for Vue, Laravel, Dart/Flutter projects
+- 🛡️ **Backup & Rollback** - Automatic pre-deployment backup with rollback on failure (SSH)
+- 🔍 **Go CI** - Lint, test, coverage, and build for Go projects
 
 ## Supported Project Types
 
@@ -63,6 +65,42 @@ The workflow will:
 
 ## Workflows
 
+### `ci-go.yml`
+
+Full CI pipeline for Go projects: lint, test with coverage, and build.
+
+**Inputs:**
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `go-version` | Go version | `stable` |
+| `working-directory` | Working directory | `.` |
+| `run-tests` | Run unit tests | `true` |
+| `run-lint` | Run golangci-lint | `true` |
+| `run-build` | Build the project | `true` |
+| `run-coverage` | Generate coverage report | `true` |
+| `test-packages` | Packages to test | `./...` |
+| `build-target` | Build target file | auto-detected |
+| `build-output` | Build output binary name | `app` |
+| `coverage-threshold` | Minimum coverage % (0 = disabled) | `0` |
+| `golangci-lint-version` | golangci-lint version | `v1.61.0` |
+| `post-coverage-comment` | Post coverage as PR comment | `true` |
+
+> **Note:** golangci-lint v2.x requires `golangci-lint-version: v2.x.x` — the action uses `golangci-lint-action@v7` which supports v2.
+
+**Example:**
+
+```yaml
+jobs:
+  ci:
+    uses: banua-coder/banua-coder-workflow/.github/workflows/ci-go.yml@v1
+    with:
+      go-version: '1.24.x'
+      golangci-lint-version: 'v2.10.1'
+      coverage-threshold: 80
+    secrets: inherit
+```
+
 ### `release.yml`
 
 Main release workflow that handles the entire release process.
@@ -80,6 +118,81 @@ Main release workflow that handles the entire release process.
 | `pnpm-version` | pnpm version (empty = use packageManager from package.json) | `` |
 | `php-version` | PHP version | `8.2` |
 | `flutter-version` | Flutter version | `3.27.2` |
+
+### `deploy-on-tag.yml`
+
+Deploy when a tag is pushed. Supports **backup & automatic rollback** for SSH deployments.
+
+**Inputs:**
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `environment` | Deployment environment | `production` |
+| `deploy-provider` | Provider: `ssh`, `vercel`, `netlify`, `firebase` | `ssh` |
+| `build-command` | Custom build command | `` |
+| `deploy-path` | Deployment path on server (SSH) | `` |
+| `node-version` | Node.js version | `20` |
+| `php-version` | PHP version | `8.2` |
+| `backup-enabled` | Take a backup before deploying (SSH only) | `true` |
+| `backup-keep` | Number of backups to retain (0 = keep all) | `3` |
+
+**Outputs:**
+
+| Output | Description |
+|--------|-------------|
+| `deploy-url` | Deployment URL (Vercel/Netlify) |
+| `status` | Deployment status |
+| `backup-path` | Path to the pre-deployment backup on the server |
+
+**Backup & Rollback Flow (SSH):**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   DEPLOY WITH BACKUP/ROLLBACK                   │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  1. Backup job                                                  │
+│     Copy current deploy-path → .backups/<timestamp>_<app>      │
+│     Prune old backups (keep N most recent)                      │
+│          │                                                      │
+│          ▼                                                      │
+│  2. Deploy job (on backup success)                              │
+│     git pull + composer/npm + artisan optimize                  │
+│          │                                                      │
+│          ├── success ──▶ done ✅                                 │
+│          │                                                      │
+│          └── failure ──▶ Rollback job 🔄                        │
+│                          rm broken deploy-path                  │
+│                          cp backup → deploy-path                │
+│                          artisan optimize (if Laravel)          │
+│                          mark workflow as failed ❌              │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+> **Cloud providers** (Vercel, Netlify, Firebase) manage their own versioning and instant rollback — the backup step is skipped automatically for these providers.
+
+**Example:**
+
+```yaml
+name: Deploy
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  deploy:
+    uses: banua-coder/banua-coder-workflow/.github/workflows/deploy-on-tag.yml@v1
+    with:
+      environment: production
+      deploy-provider: ssh
+      deploy-path: /var/www/my-app
+      backup-enabled: true
+      backup-keep: 3
+    secrets: inherit
+```
 
 ### `housekeeping.yml`
 
@@ -151,18 +264,6 @@ Customizable code quality and sanity checks for multiple project types.
 - **Laravel**: FormRequest usage, column mismatches, relationship conflicts
 - **Dart/Flutter**: File size and LOC limits
 - **Assets**: Image optimization (JPEG, PNG, SVG)
-
-### `deploy-on-tag.yml`
-
-Deploy when a tag is pushed.
-
-**Inputs:**
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| `environment` | Deployment environment | `production` |
-| `deploy-provider` | Provider: `ssh`, `vercel`, `netlify`, `firebase` | `ssh` |
-| `deploy-path` | Deployment path (for SSH) | `/var/www/app` |
 
 ### `publish-npm.yml`
 
@@ -288,7 +389,7 @@ See the [`examples/`](./examples) directory for complete workflow examples:
 │          ▼                                                      │
 │  4. Tag triggers deploy/publish                                 │
 │     ┌─────────┐                                                 │
-│     │ v1.0.0  │ ──── Deploy to production                       │
+│     │ v1.0.0  │ ──── Backup → Deploy → (Rollback on failure)    │
 │     └─────────┘      Publish to registry                        │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
@@ -345,13 +446,16 @@ Configure these secrets in your repository settings:
 |--------|--------------|-------------|
 | `GITHUB_TOKEN` | All | Automatically provided by GitHub |
 | `NPM_TOKEN` | npm publishing | npm auth token from npmjs.com |
-| `DEPLOY_HOST` | SSH deployment | Server hostname |
-| `DEPLOY_USER` | SSH deployment | SSH username |
-| `DEPLOY_KEY` | SSH deployment | SSH private key |
+| `SSH_HOST` | SSH deployment | Server hostname |
+| `SSH_USER` | SSH deployment | SSH username |
+| `SSH_KEY` | SSH deployment | SSH private key |
+| `SSH_PORT` | SSH deployment | SSH port (optional, defaults to 22) |
 | `VERCEL_TOKEN` | Vercel deployment | Vercel auth token |
+| `VERCEL_ORG_ID` | Vercel deployment | Vercel org ID |
+| `VERCEL_PROJECT_ID` | Vercel deployment | Vercel project ID |
 | `NETLIFY_AUTH_TOKEN` | Netlify deployment | Netlify auth token |
 | `NETLIFY_SITE_ID` | Netlify deployment | Netlify site ID |
-| `FIREBASE_SERVICE_ACCOUNT` | Firebase deployment | Firebase service account JSON |
+| `FIREBASE_TOKEN` | Firebase deployment | Firebase service account JSON |
 
 **Note:** For pub.dev publishing, we use OIDC authentication instead of secrets. Configure a GitHub environment named "pub.dev" following [Dart's automated publishing guide](https://dart.dev/tools/pub/automated-publishing).
 
