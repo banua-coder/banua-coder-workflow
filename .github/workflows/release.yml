@@ -73,6 +73,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          persist-credentials: true
 
       - name: Configure git credentials
         run: git remote set-url origin https://x-access-token:${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
@@ -164,6 +165,7 @@ jobs:
           ref: ${{ inputs.develop-branch }}
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          persist-credentials: true
 
       - name: Configure git credentials
         run: git remote set-url origin https://x-access-token:${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
@@ -251,6 +253,7 @@ jobs:
           ref: ${{ inputs.main-branch }}
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          persist-credentials: true
 
       - name: Configure git credentials
         run: git remote set-url origin https://x-access-token:${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
@@ -336,6 +339,7 @@ jobs:
           ref: ${{ inputs.main-branch }}
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          persist-credentials: true
 
       - name: Configure git credentials
         run: git remote set-url origin https://x-access-token:${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
