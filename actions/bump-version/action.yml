@@ -42,6 +42,7 @@ runs:
       shell: bash
       run: |
         VERSION="${{ inputs.version }}"
+        VERSION="${VERSION#v}"  # Strip leading v prefix (package.json expects plain semver)
         FILES="${{ inputs.files }}"
         PREVIOUS_VERSION=""
         FILES_UPDATED=""
