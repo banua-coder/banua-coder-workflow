@@ -187,7 +187,8 @@ jobs:
 
       - name: Create bump branch
         run: |
-          BRANCH_NAME="chore/bump-next-version"
+          NEXT_VER="${{ steps.next-version.outputs.next_version }}"
+          BRANCH_NAME="chore/bump-version-to-${NEXT_VER}-dev"
           git checkout -b "$BRANCH_NAME"
 
       - name: Setup environment
@@ -209,7 +210,8 @@ jobs:
       - name: Push and create PR
         run: |
           NEXT_VERSION="${{ steps.next-version.outputs.next_version }}"
-          BRANCH_NAME="chore/bump-next-version"
+          NEXT_VER="${{ steps.next-version.outputs.next_version }}"
+          BRANCH_NAME="chore/bump-version-to-${NEXT_VER}-dev"
 
           git push origin "$BRANCH_NAME" --force
 
@@ -424,3 +426,4 @@ jobs:
           VERSION: ${{ needs.on-merged.outputs.version }}
           TAG: ${{ needs.on-merged.outputs.tag }}
           RELEASE_NOTES: ${{ steps.get-changelog.outputs.notes }}
+
