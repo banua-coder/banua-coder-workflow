@@ -106,9 +106,22 @@ jobs:
           # `version:` is also passed in `with:` — so downstream pnpm
           # setup steps must omit `version:` and let action-setup read
           # the pin straight from package.json.
-          if [ -f "package.json" ] && grep -q '"packageManager"' package.json 2>/dev/null; then
+          #
+          # action-setup resolves packageManager from the REPO ROOT
+          # (`$GITHUB_WORKSPACE/package.json`), not from this job's
+          # `working-directory`. In monorepos the pin is almost always
+          # at the root (corepack/pnpm convention), so checking only
+          # `working-directory/package.json` silently misses it.
+          # Check the root first, then fall back to the working-dir
+          # package.json so single-package repos with their package.json
+          # in a subdirectory still work.
+          ROOT_PKG="${GITHUB_WORKSPACE:-..}/package.json"
+          if [ -f "$ROOT_PKG" ] && grep -q '"packageManager"' "$ROOT_PKG" 2>/dev/null; then
             echo "has_package_manager=true" >> $GITHUB_OUTPUT
-            echo "📌 packageManager field detected in package.json"
+            echo "📌 packageManager field detected in root package.json"
+          elif [ -f "package.json" ] && grep -q '"packageManager"' package.json 2>/dev/null; then
+            echo "has_package_manager=true" >> $GITHUB_OUTPUT
+            echo "📌 packageManager field detected in working-dir package.json"
           else
             echo "has_package_manager=false" >> $GITHUB_OUTPUT
           fi
