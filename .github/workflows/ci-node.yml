@@ -229,14 +229,18 @@ jobs:
 
       - name: Run lint
         working-directory: ${{ inputs.working-directory }}
+        env:
+          # Read user input via env so an empty value doesn't render an
+          # empty `then`-branch (bash syntax error) and untrusted text
+          # can't break out of the script context.
+          LINT_CMD: ${{ inputs.lint-command }}
+          PM: ${{ needs.detect.outputs.package-manager }}
         run: |
           echo "## 🔍 Lint Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          PM="${{ needs.detect.outputs.package-manager }}"
-
-          if [ -n "${{ inputs.lint-command }}" ]; then
-            ${{ inputs.lint-command }}
+          if [ -n "$LINT_CMD" ]; then
+            eval "$LINT_CMD"
           else
             case "$PM" in
               pnpm) pnpm run lint ;;
@@ -312,14 +316,15 @@ jobs:
 
       - name: Run typecheck
         working-directory: ${{ inputs.working-directory }}
+        env:
+          TYPECHECK_CMD: ${{ inputs.typecheck-command }}
+          PM: ${{ needs.detect.outputs.package-manager }}
         run: |
           echo "## 🔍 TypeScript Check Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          PM="${{ needs.detect.outputs.package-manager }}"
-
-          if [ -n "${{ inputs.typecheck-command }}" ]; then
-            ${{ inputs.typecheck-command }}
+          if [ -n "$TYPECHECK_CMD" ]; then
+            eval "$TYPECHECK_CMD"
           else
             # Try common typecheck scripts first
             case "$PM" in
@@ -396,44 +401,46 @@ jobs:
 
       - name: Run tests
         working-directory: ${{ inputs.working-directory }}
+        env:
+          TEST_CMD: ${{ inputs.test-command }}
+          PM: ${{ needs.detect.outputs.package-manager }}
+          RUN_COVERAGE: ${{ inputs.run-coverage }}
         run: |
           echo "## 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          PM="${{ needs.detect.outputs.package-manager }}"
           COVERAGE_ARG=""
-
-          if [ "${{ inputs.run-coverage }}" = "true" ]; then
+          if [ "$RUN_COVERAGE" = "true" ]; then
             COVERAGE_ARG="--coverage"
           fi
 
-          if [ -n "${{ inputs.test-command }}" ]; then
-            ${{ inputs.test-command }}
+          if [ -n "$TEST_CMD" ]; then
+            eval "$TEST_CMD"
           else
             case "$PM" in
               pnpm)
-                if [ "${{ inputs.run-coverage }}" = "true" ]; then
+                if [ "$RUN_COVERAGE" = "true" ]; then
                   pnpm run test:coverage 2>/dev/null || pnpm run test -- --coverage 2>/dev/null || pnpm test $COVERAGE_ARG
                 else
                   pnpm test
                 fi
                 ;;
               yarn)
-                if [ "${{ inputs.run-coverage }}" = "true" ]; then
+                if [ "$RUN_COVERAGE" = "true" ]; then
                   yarn test:coverage 2>/dev/null || yarn test --coverage
                 else
                   yarn test
                 fi
                 ;;
               bun)
-                if [ "${{ inputs.run-coverage }}" = "true" ]; then
+                if [ "$RUN_COVERAGE" = "true" ]; then
                   bun run test:coverage 2>/dev/null || bun test --coverage
                 else
                   bun test
                 fi
                 ;;
               *)
-                if [ "${{ inputs.run-coverage }}" = "true" ]; then
+                if [ "$RUN_COVERAGE" = "true" ]; then
                   npm run test:coverage 2>/dev/null || npm test -- --coverage
                 else
                   npm test
@@ -628,14 +635,15 @@ jobs:
 
       - name: Build
         working-directory: ${{ inputs.working-directory }}
+        env:
+          BUILD_CMD: ${{ inputs.build-command }}
+          PM: ${{ needs.detect.outputs.package-manager }}
         run: |
           echo "## 🔨 Build Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          PM="${{ needs.detect.outputs.package-manager }}"
-
-          if [ -n "${{ inputs.build-command }}" ]; then
-            ${{ inputs.build-command }}
+          if [ -n "$BUILD_CMD" ]; then
+            eval "$BUILD_CMD"
           else
             case "$PM" in
               pnpm) pnpm run build ;;
