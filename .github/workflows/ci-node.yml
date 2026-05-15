@@ -76,6 +76,7 @@ jobs:
       has-typescript: ${{ steps.detect.outputs.has_typescript }}
       is-monorepo: ${{ steps.detect.outputs.is_monorepo }}
       monorepo-tool: ${{ steps.detect.outputs.monorepo_tool }}
+      has-package-manager: ${{ steps.detect.outputs.has_package_manager }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -99,6 +100,18 @@ jobs:
           fi
           echo "package_manager=$PM" >> $GITHUB_OUTPUT
           echo "📦 Package manager: $PM"
+
+          # Check for packageManager field in package.json. When present,
+          # pnpm/action-setup@v4 aborts with ERR_PNPM_BAD_PM_VERSION if a
+          # `version:` is also passed in `with:` — so downstream pnpm
+          # setup steps must omit `version:` and let action-setup read
+          # the pin straight from package.json.
+          if [ -f "package.json" ] && grep -q '"packageManager"' package.json 2>/dev/null; then
+            echo "has_package_manager=true" >> $GITHUB_OUTPUT
+            echo "📌 packageManager field detected in package.json"
+          else
+            echo "has_package_manager=false" >> $GITHUB_OUTPUT
+          fi
 
           # Check for tests
           if grep -q '"test"' package.json 2>/dev/null || [ -d "__tests__" ] || [ -d "tests" ] || [ -d "test" ]; then
@@ -152,8 +165,15 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Setup pnpm
-        if: needs.detect.outputs.package-manager == 'pnpm'
+      # When package.json pins `packageManager: pnpm@X`, leave `version:`
+      # off so pnpm/action-setup reads the pin from there. Passing both
+      # crashes with ERR_PNPM_BAD_PM_VERSION.
+      - name: Setup pnpm (from packageManager)
+        if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager == 'true'
+        uses: pnpm/action-setup@v4
+
+      - name: Setup pnpm (from input version)
+        if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager != 'true'
         uses: pnpm/action-setup@v4
         with:
           version: ${{ inputs.pnpm-version }}
@@ -229,8 +249,15 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Setup pnpm
-        if: needs.detect.outputs.package-manager == 'pnpm'
+      # When package.json pins `packageManager: pnpm@X`, leave `version:`
+      # off so pnpm/action-setup reads the pin from there. Passing both
+      # crashes with ERR_PNPM_BAD_PM_VERSION.
+      - name: Setup pnpm (from packageManager)
+        if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager == 'true'
+        uses: pnpm/action-setup@v4
+
+      - name: Setup pnpm (from input version)
+        if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager != 'true'
         uses: pnpm/action-setup@v4
         with:
           version: ${{ inputs.pnpm-version }}
@@ -306,8 +333,15 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Setup pnpm
-        if: needs.detect.outputs.package-manager == 'pnpm'
+      # When package.json pins `packageManager: pnpm@X`, leave `version:`
+      # off so pnpm/action-setup reads the pin from there. Passing both
+      # crashes with ERR_PNPM_BAD_PM_VERSION.
+      - name: Setup pnpm (from packageManager)
+        if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager == 'true'
+        uses: pnpm/action-setup@v4
+
+      - name: Setup pnpm (from input version)
+        if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager != 'true'
         uses: pnpm/action-setup@v4
         with:
           version: ${{ inputs.pnpm-version }}
@@ -531,8 +565,15 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Setup pnpm
-        if: needs.detect.outputs.package-manager == 'pnpm'
+      # When package.json pins `packageManager: pnpm@X`, leave `version:`
+      # off so pnpm/action-setup reads the pin from there. Passing both
+      # crashes with ERR_PNPM_BAD_PM_VERSION.
+      - name: Setup pnpm (from packageManager)
+        if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager == 'true'
+        uses: pnpm/action-setup@v4
+
+      - name: Setup pnpm (from input version)
+        if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager != 'true'
         uses: pnpm/action-setup@v4
         with:
           version: ${{ inputs.pnpm-version }}
