@@ -6,7 +6,10 @@ on:
       node-version:
         description: 'Node.js version'
         type: string
-        default: '20'
+        # Default Node bumped to 24: 20 hit EOL in April 2026 and the
+        # GitHub Actions runner started force-deprecating Node-20
+        # JavaScript actions in June 2026.
+        default: '24'
       package-manager:
         description: 'Package manager (npm, pnpm, yarn, bun, auto)'
         type: string
@@ -65,6 +68,15 @@ on:
         description: 'Post coverage as PR comment'
         type: boolean
         default: true
+
+# Opt every JS action (actions/checkout, actions/setup-node,
+# actions/cache, pnpm/action-setup, etc.) into the Node 24 runtime
+# ahead of GitHub's forced migration. Without this, every job emits
+# the 'Node.js 20 actions are deprecated' warning until each action
+# author cuts a v5 release. Setting it at the workflow level
+# blankets every reusable job.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   detect:
