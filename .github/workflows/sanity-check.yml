@@ -93,7 +93,7 @@ jobs:
       has-assets: ${{ steps.detect.outputs.has_assets }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Detect project type
         id: detect
@@ -146,10 +146,10 @@ jobs:
       has-issues: ${{ steps.collect.outputs.has_issues }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download sanity scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: banua-coder/banua-coder-workflow
           path: .sanity-scripts
@@ -157,7 +157,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
 
@@ -303,7 +303,7 @@ jobs:
           fi
 
       - name: Upload findings
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vue-findings
           path: findings.md
@@ -320,10 +320,10 @@ jobs:
       has-issues: ${{ steps.collect.outputs.has_issues }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download sanity scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: banua-coder/banua-coder-workflow
           path: .sanity-scripts
@@ -433,7 +433,7 @@ jobs:
           echo "has_issues=${{ steps.laravel-checks.outputs.has_issues }}" >> $GITHUB_OUTPUT
 
       - name: Upload findings
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: laravel-findings
           path: findings.md
@@ -450,7 +450,7 @@ jobs:
       has-issues: ${{ steps.collect.outputs.has_issues }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check Dart file sizes
         id: dart-checks
@@ -516,7 +516,7 @@ jobs:
           echo "has_issues=${{ steps.dart-checks.outputs.has_issues }}" >> $GITHUB_OUTPUT
 
       - name: Upload findings
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dart-findings
           path: findings.md
@@ -530,7 +530,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all findings
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: '*-findings'
           merge-multiple: true

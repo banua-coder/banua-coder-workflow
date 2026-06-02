@@ -64,7 +64,7 @@ jobs:
       go-changed: ${{ steps.changes.outputs.go_changed }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -123,10 +123,10 @@ jobs:
     if: inputs.run-lint
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ inputs.go-version }}
           cache: true
@@ -152,10 +152,10 @@ jobs:
     if: inputs.run-tests && needs.detect.outputs.has-tests == 'true'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ inputs.go-version }}
           cache: true
@@ -281,7 +281,7 @@ jobs:
 
       - name: Upload coverage artifact
         if: inputs.run-coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: go-coverage
           path: ${{ inputs.working-directory }}/coverage.out
@@ -294,10 +294,10 @@ jobs:
     if: always() && inputs.run-build && needs.detect.outputs.build-target != '' && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.test.result == 'success' || needs.test.result == 'skipped')
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ inputs.go-version }}
           cache: true
@@ -331,7 +331,7 @@ jobs:
 
       - name: Upload binary artifact
         if: inputs.build-output != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: go-binary
           path: ${{ inputs.working-directory }}/${{ inputs.build-output }}
