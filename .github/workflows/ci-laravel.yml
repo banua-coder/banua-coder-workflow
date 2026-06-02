@@ -90,7 +90,7 @@ jobs:
       package-manager: ${{ steps.detect.outputs.package_manager }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Detect project configuration
         id: detect
@@ -146,7 +146,7 @@ jobs:
     if: inputs.run-lint
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -159,7 +159,7 @@ jobs:
         run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
 
       - name: Cache Composer dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.composer-cache.outputs.dir }}
           key: composer-${{ runner.os }}-${{ inputs.php-version }}-${{ hashFiles('**/composer.lock') }}
@@ -197,22 +197,22 @@ jobs:
     if: inputs.run-frontend-lint && needs.detect.outputs.has-frontend == 'true'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
 
       - name: Setup pnpm (with version)
         if: needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version != ''
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: ${{ inputs.pnpm-version }}
 
       - name: Setup pnpm (from packageManager)
         if: needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version == ''
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Get cache directory
         id: cache-dir
@@ -226,7 +226,7 @@ jobs:
           esac
 
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.cache-dir.outputs.dir }}
           key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json') }}
@@ -268,7 +268,7 @@ jobs:
     if: inputs.run-typecheck && needs.detect.outputs.has-frontend == 'true'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup PHP
         if: needs.detect.outputs.has-wayfinder == 'true'
@@ -284,7 +284,7 @@ jobs:
 
       - name: Cache Composer dependencies
         if: needs.detect.outputs.has-wayfinder == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.composer-cache.outputs.dir }}
           key: composer-${{ runner.os }}-${{ inputs.php-version }}-${{ hashFiles('**/composer.lock') }}
@@ -298,19 +298,19 @@ jobs:
         run: composer install --prefer-dist --no-progress --no-interaction
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
 
       - name: Setup pnpm (with version)
         if: needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version != ''
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: ${{ inputs.pnpm-version }}
 
       - name: Setup pnpm (from packageManager)
         if: needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version == ''
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Get cache directory
         id: cache-dir
@@ -324,7 +324,7 @@ jobs:
           esac
 
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.cache-dir.outputs.dir }}
           key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json') }}
@@ -392,7 +392,7 @@ jobs:
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 3
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -404,26 +404,26 @@ jobs:
 
       - name: Setup Node.js
         if: inputs.build-assets && needs.detect.outputs.has-frontend == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
 
       - name: Setup pnpm (with version)
         if: inputs.build-assets && needs.detect.outputs.has-frontend == 'true' && needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version != ''
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: ${{ inputs.pnpm-version }}
 
       - name: Setup pnpm (from packageManager)
         if: inputs.build-assets && needs.detect.outputs.has-frontend == 'true' && needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version == ''
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Get Composer cache directory
         id: composer-cache
         run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
 
       - name: Cache Composer dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.composer-cache.outputs.dir }}
           key: composer-${{ runner.os }}-${{ inputs.php-version }}-${{ hashFiles('**/composer.lock') }}
@@ -611,7 +611,7 @@ jobs:
 
       - name: Upload coverage artifact
         if: inputs.run-coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: laravel-coverage
           path: ${{ inputs.working-directory }}/coverage.xml
@@ -625,7 +625,7 @@ jobs:
     if: always() && inputs.build-assets && inputs.upload-build-artifact && needs.detect.outputs.has-frontend == 'true' && (needs.lint-php.result == 'success' || needs.lint-php.result == 'skipped') && (needs.lint-frontend.result == 'success' || needs.lint-frontend.result == 'skipped') && (needs.typecheck.result == 'success' || needs.typecheck.result == 'skipped') && (needs.test.result == 'success' || needs.test.result == 'skipped')
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup PHP
         if: needs.detect.outputs.has-wayfinder == 'true'
@@ -641,7 +641,7 @@ jobs:
 
       - name: Cache Composer dependencies
         if: needs.detect.outputs.has-wayfinder == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.composer-cache.outputs.dir }}
           key: composer-${{ runner.os }}-${{ inputs.php-version }}-${{ hashFiles('**/composer.lock') }}
@@ -655,19 +655,19 @@ jobs:
         run: composer install --prefer-dist --no-progress --no-interaction
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
 
       - name: Setup pnpm (with version)
         if: needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version != ''
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: ${{ inputs.pnpm-version }}
 
       - name: Setup pnpm (from packageManager)
         if: needs.detect.outputs.package-manager == 'pnpm' && inputs.pnpm-version == ''
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Get cache directory
         id: cache-dir
@@ -681,7 +681,7 @@ jobs:
           esac
 
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.cache-dir.outputs.dir }}
           key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json') }}
@@ -722,7 +722,7 @@ jobs:
           fi
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: laravel-build
           path: ${{ inputs.working-directory }}/public/build

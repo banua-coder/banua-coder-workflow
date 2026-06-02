@@ -84,7 +84,7 @@ jobs:
       dart-changed: ${{ steps.changes.outputs.dart_changed }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -146,7 +146,7 @@ jobs:
       cache-key: ${{ steps.cache-key.outputs.key }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Flutter
         id: flutter
@@ -174,7 +174,7 @@ jobs:
           fi
 
       - name: Cache pub dependencies
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             ~/.pub-cache
@@ -189,7 +189,7 @@ jobs:
     if: inputs.run-analyze
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -201,7 +201,7 @@ jobs:
           cache: true
 
       - name: Restore pub cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.pub-cache
@@ -267,7 +267,7 @@ jobs:
     if: inputs.run-format
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -277,7 +277,7 @@ jobs:
           cache: true
 
       - name: Restore pub cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.pub-cache
@@ -333,7 +333,7 @@ jobs:
     if: always() && inputs.run-tests && needs.detect.outputs.has-tests == 'true' && needs.setup.result == 'success' && (needs.analyze.result == 'success' || needs.analyze.result == 'skipped') && (needs.format.result == 'success' || needs.format.result == 'skipped')
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -345,7 +345,7 @@ jobs:
           cache: true
 
       - name: Restore pub cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.pub-cache
@@ -486,7 +486,7 @@ jobs:
 
       - name: Upload coverage artifact
         if: inputs.run-coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: ${{ inputs.working-directory }}/coverage/
@@ -499,7 +499,7 @@ jobs:
     if: inputs.run-size-guard
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check Dart file sizes
         working-directory: ${{ inputs.working-directory }}

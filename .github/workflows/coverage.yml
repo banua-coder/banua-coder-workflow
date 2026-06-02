@@ -56,7 +56,7 @@ jobs:
       lines-total: ${{ steps.calculate.outputs.lines_total }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check coverage file exists
         id: check
@@ -246,7 +246,7 @@ jobs:
 
       - name: Upload coverage artifact
         if: inputs.upload-artifact && steps.check.outputs.exists == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact-name }}
           path: |

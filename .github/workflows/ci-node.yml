@@ -91,7 +91,7 @@ jobs:
       has-package-manager: ${{ steps.detect.outputs.has_package_manager }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Detect project configuration
         id: detect
@@ -114,7 +114,7 @@ jobs:
           echo "📦 Package manager: $PM"
 
           # Check for packageManager field in package.json. When present,
-          # pnpm/action-setup@v4 aborts with ERR_PNPM_BAD_PM_VERSION if a
+          # pnpm/action-setup@v6 aborts with ERR_PNPM_BAD_PM_VERSION if a
           # `version:` is also passed in `with:` — so downstream pnpm
           # setup steps must omit `version:` and let action-setup read
           # the pin straight from package.json.
@@ -183,10 +183,10 @@ jobs:
     if: inputs.run-lint
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
 
@@ -195,11 +195,11 @@ jobs:
       # crashes with ERR_PNPM_BAD_PM_VERSION.
       - name: Setup pnpm (from packageManager)
         if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager == 'true'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup pnpm (from input version)
         if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager != 'true'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: ${{ inputs.pnpm-version }}
 
@@ -220,7 +220,7 @@ jobs:
           esac
 
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.cache-dir.outputs.dir }}
           key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ inputs.node-version }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json', '**/bun.lockb') }}
@@ -271,10 +271,10 @@ jobs:
     if: inputs.run-typecheck && needs.detect.outputs.has-typescript == 'true'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
 
@@ -283,11 +283,11 @@ jobs:
       # crashes with ERR_PNPM_BAD_PM_VERSION.
       - name: Setup pnpm (from packageManager)
         if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager == 'true'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup pnpm (from input version)
         if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager != 'true'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: ${{ inputs.pnpm-version }}
 
@@ -308,7 +308,7 @@ jobs:
           esac
 
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.cache-dir.outputs.dir }}
           key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ inputs.node-version }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json', '**/bun.lockb') }}
@@ -356,10 +356,10 @@ jobs:
     if: inputs.run-tests && needs.detect.outputs.has-tests == 'true'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
 
@@ -368,11 +368,11 @@ jobs:
       # crashes with ERR_PNPM_BAD_PM_VERSION.
       - name: Setup pnpm (from packageManager)
         if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager == 'true'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup pnpm (from input version)
         if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager != 'true'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: ${{ inputs.pnpm-version }}
 
@@ -393,7 +393,7 @@ jobs:
           esac
 
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.cache-dir.outputs.dir }}
           key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ inputs.node-version }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json', '**/bun.lockb') }}
@@ -575,7 +575,7 @@ jobs:
 
       - name: Upload coverage artifact
         if: inputs.run-coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: node-coverage
           path: |
@@ -590,10 +590,10 @@ jobs:
     if: always() && inputs.run-build && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.typecheck.result == 'success' || needs.typecheck.result == 'skipped') && (needs.test.result == 'success' || needs.test.result == 'skipped')
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
 
@@ -602,11 +602,11 @@ jobs:
       # crashes with ERR_PNPM_BAD_PM_VERSION.
       - name: Setup pnpm (from packageManager)
         if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager == 'true'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup pnpm (from input version)
         if: needs.detect.outputs.package-manager == 'pnpm' && needs.detect.outputs.has-package-manager != 'true'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: ${{ inputs.pnpm-version }}
 
@@ -627,7 +627,7 @@ jobs:
           esac
 
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.cache-dir.outputs.dir }}
           key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ inputs.node-version }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json', '**/bun.lockb') }}
@@ -680,7 +680,7 @@ jobs:
           done
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: node-build
           path: |

@@ -138,7 +138,7 @@ jobs:
       status: ${{ steps.set-outputs.outputs.status }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: banua-coder/banua-coder-workflow/actions/setup-environment@main
