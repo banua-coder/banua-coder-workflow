@@ -82,6 +82,7 @@ jobs:
   detect:
     name: Detect Configuration
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     outputs:
       package-manager: ${{ steps.detect.outputs.package_manager }}
       has-tests: ${{ steps.detect.outputs.has_tests }}
@@ -179,6 +180,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: detect
     if: inputs.run-lint
     steps:
@@ -267,6 +269,7 @@ jobs:
   typecheck:
     name: TypeScript Check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: detect
     if: inputs.run-typecheck && needs.detect.outputs.has-typescript == 'true'
     steps:
@@ -352,6 +355,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: detect
     if: inputs.run-tests && needs.detect.outputs.has-tests == 'true'
     steps:
@@ -586,6 +590,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [detect, lint, typecheck, test]
     if: always() && inputs.run-build && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.typecheck.result == 'success' || needs.typecheck.result == 'skipped') && (needs.test.result == 'success' || needs.test.result == 'skipped')
     steps:

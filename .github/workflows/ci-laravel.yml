@@ -82,6 +82,7 @@ jobs:
   detect:
     name: Detect Configuration
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       has-tests: ${{ steps.detect.outputs.has_tests }}
       has-frontend: ${{ steps.detect.outputs.has_frontend }}
@@ -142,6 +143,7 @@ jobs:
   lint-php:
     name: Lint PHP
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: detect
     if: inputs.run-lint
     steps:
@@ -193,6 +195,7 @@ jobs:
   lint-frontend:
     name: Lint Frontend
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: detect
     if: inputs.run-frontend-lint && needs.detect.outputs.has-frontend == 'true'
     steps:
@@ -264,6 +267,7 @@ jobs:
   typecheck:
     name: TypeScript Check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: detect
     if: inputs.run-typecheck && needs.detect.outputs.has-frontend == 'true'
     steps:
@@ -370,6 +374,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: detect
     if: inputs.run-tests && needs.detect.outputs.has-tests == 'true'
     services:
@@ -621,6 +626,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [detect, lint-php, lint-frontend, typecheck, test]
     if: always() && inputs.build-assets && inputs.upload-build-artifact && needs.detect.outputs.has-frontend == 'true' && (needs.lint-php.result == 'success' || needs.lint-php.result == 'skipped') && (needs.lint-frontend.result == 'success' || needs.lint-frontend.result == 'skipped') && (needs.typecheck.result == 'success' || needs.typecheck.result == 'skipped') && (needs.test.result == 'success' || needs.test.result == 'skipped')
     steps:
