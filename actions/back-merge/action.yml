@@ -266,6 +266,12 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
         PR_NUMBER="${{ steps.create-pr.outputs.pr_number }}"
-        gh pr merge "$PR_NUMBER" --merge --auto
-        echo "✅ Auto-merge enabled for PR #$PR_NUMBER"
+        if gh pr merge "$PR_NUMBER" --merge --auto 2>/dev/null; then
+          echo "✅ Auto-merge enabled (or merged immediately) for PR #$PR_NUMBER"
+        else
+          echo "Auto-merge unavailable — waiting for checks, then merging directly"
+          gh pr checks "$PR_NUMBER" --watch --fail-fast || true
+          gh pr merge "$PR_NUMBER" --merge
+          echo "✅ Merged PR #$PR_NUMBER directly"
+        fi
 

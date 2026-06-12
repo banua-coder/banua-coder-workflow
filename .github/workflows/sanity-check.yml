@@ -85,6 +85,7 @@ jobs:
   detect:
     name: Detect Project Type
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       project-type: ${{ steps.detect.outputs.type }}
       has-vue: ${{ steps.detect.outputs.has_vue }}
@@ -141,6 +142,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.has-vue == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       findings: ${{ steps.collect.outputs.findings }}
       has-issues: ${{ steps.collect.outputs.has_issues }}
@@ -315,6 +317,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.has-laravel == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       findings: ${{ steps.collect.outputs.findings }}
       has-issues: ${{ steps.collect.outputs.has_issues }}
@@ -445,6 +448,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.has-dart == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       findings: ${{ steps.collect.outputs.findings }}
       has-issues: ${{ steps.collect.outputs.has_issues }}
@@ -528,6 +532,7 @@ jobs:
     needs: [detect, vue-checks, laravel-checks, dart-checks]
     if: always() && github.event_name == 'pull_request' && inputs.post-comment
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Download all findings
         uses: actions/download-artifact@v8

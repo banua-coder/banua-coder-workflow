@@ -46,6 +46,7 @@ jobs:
   detect:
     name: Detect Configuration
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     outputs:
       has-tests: ${{ steps.detect.outputs.has_tests }}
       has-cargo-toml: ${{ steps.detect.outputs.has_cargo_toml }}
@@ -78,6 +79,7 @@ jobs:
   fmt:
     name: Format Check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: detect
     if: inputs.run-fmt-check && needs.detect.outputs.has-cargo-toml == 'true'
     steps:
@@ -106,6 +108,7 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: detect
     if: (inputs.run-lint || inputs.run-clippy) && needs.detect.outputs.has-cargo-toml == 'true'
     env:
@@ -145,6 +148,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: detect
     if: inputs.run-tests && needs.detect.outputs.has-cargo-toml == 'true' && needs.detect.outputs.has-tests == 'true'
     env:
@@ -194,6 +198,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [detect, fmt, clippy, test]
     if: always() && inputs.run-build && needs.detect.outputs.has-cargo-toml == 'true' && (needs.fmt.result == 'success' || needs.fmt.result == 'skipped') && (needs.clippy.result == 'success' || needs.clippy.result == 'skipped') && (needs.test.result == 'success' || needs.test.result == 'skipped')
     env:
