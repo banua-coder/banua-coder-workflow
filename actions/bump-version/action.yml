@@ -53,21 +53,30 @@ runs:
           IS_PHP_PROJECT=false
           IS_GO_PROJECT=false
 
-          # Check if it's a Go project
-          if [ -f "go.mod" ]; then
-            IS_GO_PROJECT=true
-            # If .version-config.yml exists, delegate to update-version.sh script
-            if [ -f ".version-config.yml" ] && [ -f "scripts/update-version.sh" ]; then
-              echo "🐹 Go project with .version-config.yml detected — using update-version.sh"
-              chmod +x scripts/update-version.sh
-              scripts/update-version.sh "$VERSION"
-              FILES_UPDATED="(via scripts/update-version.sh)"
+          # If .version-config.yml exists, delegate entirely to update-version.sh
+          if [ -f ".version-config.yml" ]; then
+            SCRIPT_PATH=""
+            if [ -f "scripts/release/update-version.sh" ]; then
+              SCRIPT_PATH="scripts/release/update-version.sh"
+            elif [ -f "scripts/update-version.sh" ]; then
+              SCRIPT_PATH="scripts/update-version.sh"
+            fi
+            if [ -n "$SCRIPT_PATH" ]; then
+              echo "📋 .version-config.yml detected — using $SCRIPT_PATH"
+              chmod +x "$SCRIPT_PATH"
+              "$SCRIPT_PATH" "$VERSION" --config .version-config.yml
+              FILES_UPDATED="(via $SCRIPT_PATH with .version-config.yml)"
               echo "version=$VERSION" >> $GITHUB_OUTPUT
               echo "previous_version=" >> $GITHUB_OUTPUT
               echo "files_updated=$FILES_UPDATED" >> $GITHUB_OUTPUT
               echo "✅ Version bumped to $VERSION"
               exit 0
             fi
+          fi
+
+          # Check if it's a Go project
+          if [ -f "go.mod" ]; then
+            IS_GO_PROJECT=true
             # Fallback: update common Go version patterns directly
             FILES="go:auto"
           fi
