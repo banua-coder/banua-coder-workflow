@@ -161,7 +161,16 @@ function extractUpMethodContent(string $content): string
 }
 
 /**
- * Extract columns from any migration that modifies a specific table
+ * Extract column operations from any migration that modifies a specific table,
+ * as an ORDERED sequence (add/rename/drop) in the order they actually execute.
+ *
+ * Order matters: a migration that adds a differently-named column, drops the
+ * old column, then renames the new one back to the original name (the
+ * standard Laravel pattern for changing a column's type) must be replayed in
+ * that exact sequence. Bucketing renames/drops separately and applying them
+ * in a fixed order afterward (as this function used to) incorrectly drops
+ * the final column, because "drop 'foo'" and "rename to 'foo'" both mention
+ * the same name and a set-based apply can't tell which happened last.
  */
 function extractColumnsFromMigrationForTable(string $filePath, string $tableName): array
 {
@@ -169,9 +178,7 @@ function extractColumnsFromMigrationForTable(string $filePath, string $tableName
     // Only look in up() method to avoid down() canceling renames
     $upContent = extractUpMethodContent($content);
 
-    $columns = [];
-    $renamedColumns = [];
-    $droppedColumns = [];
+    $operations = [];
 
     // Match Schema::table('tableName', function) for modifications - match multiple blocks
     // Also handles Schema::connection('..')->table() syntax
@@ -195,38 +202,52 @@ function extractColumnsFromMigrationForTable(string $filePath, string $tableName
             }
 
             $tableContent = substr($upContent, $startPos, $endPos - $startPos);
+            $blockOffset = $startPos;
 
             // Match column definitions
             $colPattern = '/\$table->(?:string|text|longText|mediumText|tinyText|char|integer|bigInteger|unsignedInteger|unsignedBigInteger|unsignedTinyInteger|unsignedSmallInteger|tinyInteger|smallInteger|mediumInteger|decimal|float|double|boolean|date|dateTime|dateTimeTz|timestamp|timestampTz|time|timeTz|year|json|jsonb|enum|foreignId|foreignUlid|foreignUuid|uuid|ulid|binary|ipAddress|macAddress|morphs|nullableMorphs|uuidMorphs|nullableUuidMorphs)\s*\(\s*[\'"]([^"\']+)[\'"]/m';
 
-            if (preg_match_all($colPattern, $tableContent, $colMatches)) {
-                $columns = array_merge($columns, $colMatches[1]);
+            if (preg_match_all($colPattern, $tableContent, $colMatches, PREG_OFFSET_CAPTURE)) {
+                foreach ($colMatches[1] as $m) {
+                    $operations[] = ['pos' => $blockOffset + $m[1], 'type' => 'add', 'name' => $m[0]];
+                }
             }
 
             // Check for column renames: $table->renameColumn('old', 'new')
-            if (preg_match_all('/\$table->renameColumn\s*\(\s*[\'"]([^\'"]+)[\'"]\s*,\s*[\'"]([^\'"]+)[\'"]\s*\)/', $tableContent, $renameMatches, PREG_SET_ORDER)) {
+            if (preg_match_all('/\$table->renameColumn\s*\(\s*[\'"]([^\'"]+)[\'"]\s*,\s*[\'"]([^\'"]+)[\'"]\s*\)/', $tableContent, $renameMatches, PREG_OFFSET_CAPTURE | PREG_SET_ORDER)) {
                 foreach ($renameMatches as $rename) {
-                    $renamedColumns[$rename[1]] = $rename[2];
+                    $operations[] = ['pos' => $blockOffset + $rename[0][1], 'type' => 'rename', 'from' => $rename[1][0], 'to' => $rename[2][0]];
                 }
             }
 
             // Check for dropped columns: $table->dropColumn('col') or $table->dropColumn(['col1', 'col2'])
             // Single column drop
-            if (preg_match_all('/\$table->dropColumn\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)/', $tableContent, $dropMatches)) {
-                $droppedColumns = array_merge($droppedColumns, $dropMatches[1]);
+            if (preg_match_all('/\$table->dropColumn\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)/', $tableContent, $dropMatches, PREG_OFFSET_CAPTURE)) {
+                foreach ($dropMatches[1] as $m) {
+                    $operations[] = ['pos' => $blockOffset + $m[1], 'type' => 'drop', 'name' => $m[0]];
+                }
             }
             // Array of columns drop
-            if (preg_match_all('/\$table->dropColumn\s*\(\s*\[(.*?)\]\s*\)/s', $tableContent, $dropArrayMatches)) {
-                foreach ($dropArrayMatches[1] as $dropList) {
-                    if (preg_match_all('/[\'"]([^\'"]+)[\'"]/', $dropList, $dropColMatches)) {
-                        $droppedColumns = array_merge($droppedColumns, $dropColMatches[1]);
+            if (preg_match_all('/\$table->dropColumn\s*\(\s*\[(.*?)\]\s*\)/s', $tableContent, $dropArrayMatches, PREG_OFFSET_CAPTURE)) {
+                foreach ($dropArrayMatches[1] as $dropListMatch) {
+                    $dropList = $dropListMatch[0];
+                    $listOffset = $dropListMatch[1];
+                    if (preg_match_all('/[\'"]([^\'"]+)[\'"]/', $dropList, $dropColMatches, PREG_OFFSET_CAPTURE)) {
+                        foreach ($dropColMatches[1] as $m) {
+                            $operations[] = ['pos' => $blockOffset + $listOffset + $m[1], 'type' => 'drop', 'name' => $m[0]];
+                        }
                     }
                 }
             }
         }
     }
 
-    return ['columns' => $columns, 'renames' => $renamedColumns, 'drops' => $droppedColumns];
+    // Blocks are already in document order via preg_match_all, but operations
+    // within/across blocks were collected type-by-type above — sort by
+    // position to recover the true execution order.
+    usort($operations, fn ($a, $b) => $a['pos'] <=> $b['pos']);
+
+    return $operations;
 }
 
 /**
@@ -235,8 +256,6 @@ function extractColumnsFromMigrationForTable(string $filePath, string $tableName
 function getAllColumnsForTable(string $basePath, string $tableName): array
 {
     $columns = [];
-    $renamedColumns = [];
-    $droppedColumns = [];
 
     // Get create migration
     $createMigrations = findFiles($basePath.'/database/migrations', "*_create_{$tableName}_table.php");
@@ -260,21 +279,26 @@ function getAllColumnsForTable(string $basePath, string $tableName): array
         // Check if this migration modifies our table
         $content = file_get_contents($migration);
         if (str_contains($content, "'{$tableName}'") || str_contains($content, "\"{$tableName}\"")) {
-            $result = extractColumnsFromMigrationForTable($migration, $tableName);
-            $columns = array_merge($columns, $result['columns']);
-            $renamedColumns = array_merge($renamedColumns, $result['renames']);
-            $droppedColumns = array_merge($droppedColumns, $result['drops']);
+            // Replay this migration's add/rename/drop operations in the order
+            // they actually execute, so a column that's dropped and then
+            // renamed back to the same name within one migration ends up
+            // present, not incorrectly removed.
+            foreach (extractColumnsFromMigrationForTable($migration, $tableName) as $op) {
+                switch ($op['type']) {
+                    case 'add':
+                        $columns[] = $op['name'];
+                        break;
+                    case 'rename':
+                        $columns = array_diff($columns, [$op['from']]);
+                        $columns[] = $op['to'];
+                        break;
+                    case 'drop':
+                        $columns = array_diff($columns, [$op['name']]);
+                        break;
+                }
+            }
         }
     }
-
-    // Apply renames
-    foreach ($renamedColumns as $oldName => $newName) {
-        $columns = array_diff($columns, [$oldName]);
-        $columns[] = $newName;
-    }
-
-    // Remove dropped columns
-    $columns = array_diff($columns, $droppedColumns);
 
     // Remove common auto columns
     $autoColumns = ['id', 'created_at', 'updated_at', 'deleted_at'];
