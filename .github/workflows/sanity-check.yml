@@ -222,11 +222,17 @@ jobs:
 
           SCRIPT_PATH=".sanity-scripts/scripts/vue/check-native-inputs.cjs"
           if [ -f "$SCRIPT_PATH" ]; then
-            OUTPUT=$(node "$SCRIPT_PATH" 2>&1) || true
+            OUTPUT=$(node "$SCRIPT_PATH" 2>&1)
+            SCRIPT_EXIT=$?
             if [ -n "$OUTPUT" ]; then
               echo "$OUTPUT" >> findings.md
             else
               echo "✅ No native HTML inputs found outside ui components" >> findings.md
+            fi
+            if [ $SCRIPT_EXIT -ne 0 ]; then
+              echo "has_issues=true" >> $GITHUB_OUTPUT
+            else
+              echo "has_issues=false" >> $GITHUB_OUTPUT
             fi
           else
             # Fallback to inline check
@@ -244,8 +250,10 @@ jobs:
               echo "Found native HTML inputs that should use shadcn-vue components:" >> findings.md
               echo -e "$ISSUES" >> findings.md
               echo "> **Suggestion:** Replace with components from \`@/components/ui\`" >> findings.md
+              echo "has_issues=true" >> $GITHUB_OUTPUT
             else
               echo "✅ No native HTML inputs found outside ui components" >> findings.md
+              echo "has_issues=false" >> $GITHUB_OUTPUT
             fi
           fi
           echo "" >> findings.md
@@ -259,11 +267,17 @@ jobs:
 
           SCRIPT_PATH=".sanity-scripts/scripts/vue/check-vue-types.sh"
           if [ -f "$SCRIPT_PATH" ]; then
-            OUTPUT=$(bash "$SCRIPT_PATH" 2>&1) || true
+            OUTPUT=$(bash "$SCRIPT_PATH" 2>&1)
+            SCRIPT_EXIT=$?
             if [ -n "$OUTPUT" ]; then
               echo "$OUTPUT" >> findings.md
             else
               echo "✅ No type definitions found inside .vue files" >> findings.md
+            fi
+            if [ $SCRIPT_EXIT -ne 0 ]; then
+              echo "has_issues=true" >> $GITHUB_OUTPUT
+            else
+              echo "has_issues=false" >> $GITHUB_OUTPUT
             fi
           else
             # Fallback: Check for interface/type definitions in .vue files
@@ -281,8 +295,10 @@ jobs:
               echo "Found type definitions inside .vue files (should be in separate .ts files):" >> findings.md
               echo -e "$ISSUES" >> findings.md
               echo "> **Suggestion:** Move type definitions to dedicated .ts files" >> findings.md
+              echo "has_issues=true" >> $GITHUB_OUTPUT
             else
               echo "✅ No type definitions found inside .vue files" >> findings.md
+              echo "has_issues=false" >> $GITHUB_OUTPUT
             fi
           fi
           echo "" >> findings.md
@@ -298,11 +314,17 @@ jobs:
             echo 'findings=""' >> $GITHUB_OUTPUT
           fi
 
+          HAS_ISSUES=false
           if [ "${{ steps.vue-loc.outputs.has_issues }}" = "true" ]; then
-            echo "has_issues=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_issues=false" >> $GITHUB_OUTPUT
+            HAS_ISSUES=true
           fi
+          if [ "${{ steps.native-inputs.outputs.has_issues }}" = "true" ]; then
+            HAS_ISSUES=true
+          fi
+          if [ "${{ steps.vue-types.outputs.has_issues }}" = "true" ]; then
+            HAS_ISSUES=true
+          fi
+          echo "has_issues=$HAS_ISSUES" >> $GITHUB_OUTPUT
 
       - name: Upload findings
         uses: actions/upload-artifact@v7
@@ -352,12 +374,11 @@ jobs:
 
             SCRIPT_PATH=".sanity-scripts/scripts/laravel/check-missing-requests.php"
             if [ -f "$SCRIPT_PATH" ]; then
-              OUTPUT=$(php "$SCRIPT_PATH" 2>&1) || true
-              if [ -n "$OUTPUT" ]; then
-                echo "$OUTPUT" >> findings.md
+              OUTPUT=$(php "$SCRIPT_PATH" 2>&1)
+              SCRIPT_EXIT=$?
+              echo "$OUTPUT" >> findings.md
+              if [ $SCRIPT_EXIT -ne 0 ]; then
                 HAS_ISSUES=true
-              else
-                echo "✅ All controllers use proper FormRequest classes" >> findings.md
               fi
             else
               # Fallback to inline check
@@ -389,12 +410,11 @@ jobs:
 
             SCRIPT_PATH=".sanity-scripts/scripts/laravel/check-column-mismatches.php"
             if [ -f "$SCRIPT_PATH" ]; then
-              OUTPUT=$(php "$SCRIPT_PATH" 2>&1) || true
-              if [ -n "$OUTPUT" ]; then
-                echo "$OUTPUT" >> findings.md
+              OUTPUT=$(php "$SCRIPT_PATH" 2>&1)
+              SCRIPT_EXIT=$?
+              echo "$OUTPUT" >> findings.md
+              if [ $SCRIPT_EXIT -ne 0 ]; then
                 HAS_ISSUES=true
-              else
-                echo "✅ No column mismatches found" >> findings.md
               fi
             else
               echo "⚠️ Script not found" >> findings.md
@@ -409,12 +429,11 @@ jobs:
 
             SCRIPT_PATH=".sanity-scripts/scripts/laravel/check-relationship-conflicts.php"
             if [ -f "$SCRIPT_PATH" ]; then
-              OUTPUT=$(php "$SCRIPT_PATH" 2>&1) || true
-              if [ -n "$OUTPUT" ]; then
-                echo "$OUTPUT" >> findings.md
+              OUTPUT=$(php "$SCRIPT_PATH" 2>&1)
+              SCRIPT_EXIT=$?
+              echo "$OUTPUT" >> findings.md
+              if [ $SCRIPT_EXIT -ne 0 ]; then
                 HAS_ISSUES=true
-              else
-                echo "✅ No relationship conflicts found" >> findings.md
               fi
             else
               echo "⚠️ Script not found" >> findings.md
