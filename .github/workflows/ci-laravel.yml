@@ -245,7 +245,10 @@ jobs:
           GH_PAT: ${{ secrets.gh-pat }}
         run: |
           if [ -n "$GH_PAT" ]; then
-            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+            # pnpm/npm normalize github.com git dependencies to the SSH shorthand
+            # (git@github.com:owner/repo.git) regardless of the protocol given in
+            # package.json, so the rewrite has to target that form, not https://.
+            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "git@github.com:"
           fi
 
       - name: Install dependencies
@@ -352,7 +355,10 @@ jobs:
           GH_PAT: ${{ secrets.gh-pat }}
         run: |
           if [ -n "$GH_PAT" ]; then
-            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+            # pnpm/npm normalize github.com git dependencies to the SSH shorthand
+            # (git@github.com:owner/repo.git) regardless of the protocol given in
+            # package.json, so the rewrite has to target that form, not https://.
+            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "git@github.com:"
           fi
 
       - name: Install dependencies
@@ -465,7 +471,10 @@ jobs:
           GH_PAT: ${{ secrets.gh-pat }}
         run: |
           if [ -n "$GH_PAT" ]; then
-            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+            # pnpm/npm normalize github.com git dependencies to the SSH shorthand
+            # (git@github.com:owner/repo.git) regardless of the protocol given in
+            # package.json, so the rewrite has to target that form, not https://.
+            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "git@github.com:"
           fi
 
       - name: Install Node dependencies
@@ -728,7 +737,10 @@ jobs:
           GH_PAT: ${{ secrets.gh-pat }}
         run: |
           if [ -n "$GH_PAT" ]; then
-            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+            # pnpm/npm normalize github.com git dependencies to the SSH shorthand
+            # (git@github.com:owner/repo.git) regardless of the protocol given in
+            # package.json, so the rewrite has to target that form, not https://.
+            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "git@github.com:"
           fi
 
       - name: Install dependencies
