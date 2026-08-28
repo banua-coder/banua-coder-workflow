@@ -77,6 +77,10 @@ on:
         description: 'Additional SQLite database files to create (space-separated, e.g., "flags.sqlite cache.sqlite")'
         type: string
         default: ''
+    secrets:
+      gh-pat:
+        description: 'GitHub PAT with read access to any private git dependency in package.json (optional — only needed when one is present; a plain pnpm/yarn/npm install otherwise has no credentials for private repos beyond this one)'
+        required: false
 
 jobs:
   detect:
@@ -236,6 +240,14 @@ jobs:
           restore-keys: |
             ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-
 
+      - name: Configure git credentials for private dependencies
+        env:
+          GH_PAT: ${{ secrets.gh-pat }}
+        run: |
+          if [ -n "$GH_PAT" ]; then
+            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+          fi
+
       - name: Install dependencies
         working-directory: ${{ inputs.working-directory }}
         run: |
@@ -334,6 +346,14 @@ jobs:
           key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json') }}
           restore-keys: |
             ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-
+
+      - name: Configure git credentials for private dependencies
+        env:
+          GH_PAT: ${{ secrets.gh-pat }}
+        run: |
+          if [ -n "$GH_PAT" ]; then
+            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+          fi
 
       - name: Install dependencies
         working-directory: ${{ inputs.working-directory }}
@@ -438,6 +458,15 @@ jobs:
       - name: Install Composer dependencies
         working-directory: ${{ inputs.working-directory }}
         run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Configure git credentials for private dependencies
+        if: inputs.build-assets && needs.detect.outputs.has-frontend == 'true'
+        env:
+          GH_PAT: ${{ secrets.gh-pat }}
+        run: |
+          if [ -n "$GH_PAT" ]; then
+            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+          fi
 
       - name: Install Node dependencies
         if: inputs.build-assets && needs.detect.outputs.has-frontend == 'true'
@@ -693,6 +722,14 @@ jobs:
           key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json') }}
           restore-keys: |
             ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-
+
+      - name: Configure git credentials for private dependencies
+        env:
+          GH_PAT: ${{ secrets.gh-pat }}
+        run: |
+          if [ -n "$GH_PAT" ]; then
+            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+          fi
 
       - name: Install dependencies
         working-directory: ${{ inputs.working-directory }}
