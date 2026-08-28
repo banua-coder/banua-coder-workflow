@@ -222,8 +222,18 @@ jobs:
 
           SCRIPT_PATH=".sanity-scripts/scripts/vue/check-native-inputs.cjs"
           if [ -f "$SCRIPT_PATH" ]; then
-            OUTPUT=$(node "$SCRIPT_PATH" 2>&1)
-            SCRIPT_EXIT=$?
+            # `if OUTPUT=$(...); then` (not a plain assignment) is required
+            # here: under `set -e` (the shell mode these composite `run:`
+            # blocks use), a plain `OUTPUT=$(cmd)` assignment where cmd exits
+            # non-zero aborts the ENTIRE script immediately, before
+            # `SCRIPT_EXIT=$?` can ever run -- exactly the case we need to
+            # detect (the script exiting non-zero to report a real issue).
+            # Using the command as an `if` condition is exempt from `set -e`.
+            if OUTPUT=$(node "$SCRIPT_PATH" 2>&1); then
+              SCRIPT_EXIT=0
+            else
+              SCRIPT_EXIT=$?
+            fi
             if [ -n "$OUTPUT" ]; then
               echo "$OUTPUT" >> findings.md
             else
@@ -267,8 +277,11 @@ jobs:
 
           SCRIPT_PATH=".sanity-scripts/scripts/vue/check-vue-types.sh"
           if [ -f "$SCRIPT_PATH" ]; then
-            OUTPUT=$(bash "$SCRIPT_PATH" 2>&1)
-            SCRIPT_EXIT=$?
+            if OUTPUT=$(bash "$SCRIPT_PATH" 2>&1); then
+              SCRIPT_EXIT=0
+            else
+              SCRIPT_EXIT=$?
+            fi
             if [ -n "$OUTPUT" ]; then
               echo "$OUTPUT" >> findings.md
             else
@@ -374,8 +387,11 @@ jobs:
 
             SCRIPT_PATH=".sanity-scripts/scripts/laravel/check-missing-requests.php"
             if [ -f "$SCRIPT_PATH" ]; then
-              OUTPUT=$(php "$SCRIPT_PATH" 2>&1)
-              SCRIPT_EXIT=$?
+              if OUTPUT=$(php "$SCRIPT_PATH" 2>&1); then
+                SCRIPT_EXIT=0
+              else
+                SCRIPT_EXIT=$?
+              fi
               echo "$OUTPUT" >> findings.md
               if [ $SCRIPT_EXIT -ne 0 ]; then
                 HAS_ISSUES=true
@@ -410,8 +426,11 @@ jobs:
 
             SCRIPT_PATH=".sanity-scripts/scripts/laravel/check-column-mismatches.php"
             if [ -f "$SCRIPT_PATH" ]; then
-              OUTPUT=$(php "$SCRIPT_PATH" 2>&1)
-              SCRIPT_EXIT=$?
+              if OUTPUT=$(php "$SCRIPT_PATH" 2>&1); then
+                SCRIPT_EXIT=0
+              else
+                SCRIPT_EXIT=$?
+              fi
               echo "$OUTPUT" >> findings.md
               if [ $SCRIPT_EXIT -ne 0 ]; then
                 HAS_ISSUES=true
@@ -429,8 +448,11 @@ jobs:
 
             SCRIPT_PATH=".sanity-scripts/scripts/laravel/check-relationship-conflicts.php"
             if [ -f "$SCRIPT_PATH" ]; then
-              OUTPUT=$(php "$SCRIPT_PATH" 2>&1)
-              SCRIPT_EXIT=$?
+              if OUTPUT=$(php "$SCRIPT_PATH" 2>&1); then
+                SCRIPT_EXIT=0
+              else
+                SCRIPT_EXIT=$?
+              fi
               echo "$OUTPUT" >> findings.md
               if [ $SCRIPT_EXIT -ne 0 ]; then
                 HAS_ISSUES=true
