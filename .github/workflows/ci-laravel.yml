@@ -173,6 +173,18 @@ jobs:
             composer-${{ runner.os }}-${{ inputs.php-version }}-
             composer-${{ runner.os }}-
 
+      - name: Configure git credentials for private dependencies
+        env:
+          GH_PAT: ${{ secrets.gh-pat }}
+        run: |
+          if [ -n "$GH_PAT" ]; then
+            # Composer and pnpm/npm both normalize github.com git dependencies to
+            # the SSH shorthand (git@github.com:owner/repo.git) internally when
+            # cloning, regardless of the protocol given in composer.json/package.json,
+            # so the rewrite has to target that form, not https://.
+            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "git@github.com:"
+          fi
+
       - name: Install Composer dependencies
         working-directory: ${{ inputs.working-directory }}
         run: composer install --prefer-dist --no-progress --no-interaction
@@ -311,6 +323,20 @@ jobs:
             composer-${{ runner.os }}-${{ inputs.php-version }}-
             composer-${{ runner.os }}-
 
+      - name: Configure git credentials for private dependencies
+        env:
+          GH_PAT: ${{ secrets.gh-pat }}
+        run: |
+          if [ -n "$GH_PAT" ]; then
+            # Composer and pnpm/npm both normalize github.com git dependencies to
+            # the SSH shorthand (git@github.com:owner/repo.git) internally when
+            # cloning, regardless of the protocol given in composer.json/package.json,
+            # so the rewrite has to target that form, not https://. Must run before
+            # ANY step in this job that installs a private git dependency — Composer
+            # runs first (when has-wayfinder), pnpm/yarn/npm always, both need it.
+            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "git@github.com:"
+          fi
+
       - name: Install Composer dependencies
         if: needs.detect.outputs.has-wayfinder == 'true'
         working-directory: ${{ inputs.working-directory }}
@@ -349,17 +375,6 @@ jobs:
           key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json') }}
           restore-keys: |
             ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-
-
-      - name: Configure git credentials for private dependencies
-        env:
-          GH_PAT: ${{ secrets.gh-pat }}
-        run: |
-          if [ -n "$GH_PAT" ]; then
-            # pnpm/npm normalize github.com git dependencies to the SSH shorthand
-            # (git@github.com:owner/repo.git) regardless of the protocol given in
-            # package.json, so the rewrite has to target that form, not https://.
-            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "git@github.com:"
-          fi
 
       - name: Install dependencies
         working-directory: ${{ inputs.working-directory }}
@@ -461,21 +476,23 @@ jobs:
           restore-keys: |
             composer-${{ runner.os }}-${{ inputs.php-version }}-
 
-      - name: Install Composer dependencies
-        working-directory: ${{ inputs.working-directory }}
-        run: composer install --prefer-dist --no-progress --no-interaction
-
       - name: Configure git credentials for private dependencies
-        if: inputs.build-assets && needs.detect.outputs.has-frontend == 'true'
         env:
           GH_PAT: ${{ secrets.gh-pat }}
         run: |
           if [ -n "$GH_PAT" ]; then
-            # pnpm/npm normalize github.com git dependencies to the SSH shorthand
-            # (git@github.com:owner/repo.git) regardless of the protocol given in
-            # package.json, so the rewrite has to target that form, not https://.
+            # Composer and pnpm/npm both normalize github.com git dependencies to
+            # the SSH shorthand (git@github.com:owner/repo.git) internally when
+            # cloning, regardless of the protocol given in composer.json/package.json,
+            # so the rewrite has to target that form, not https://. Must run before
+            # ANY step in this job that installs a private git dependency — Composer
+            # runs first, pnpm/yarn/npm later, both need it.
             git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "git@github.com:"
           fi
+
+      - name: Install Composer dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: composer install --prefer-dist --no-progress --no-interaction
 
       - name: Install Node dependencies
         if: inputs.build-assets && needs.detect.outputs.has-frontend == 'true'
@@ -693,6 +710,20 @@ jobs:
             composer-${{ runner.os }}-${{ inputs.php-version }}-
             composer-${{ runner.os }}-
 
+      - name: Configure git credentials for private dependencies
+        env:
+          GH_PAT: ${{ secrets.gh-pat }}
+        run: |
+          if [ -n "$GH_PAT" ]; then
+            # Composer and pnpm/npm both normalize github.com git dependencies to
+            # the SSH shorthand (git@github.com:owner/repo.git) internally when
+            # cloning, regardless of the protocol given in composer.json/package.json,
+            # so the rewrite has to target that form, not https://. Must run before
+            # ANY step in this job that installs a private git dependency — Composer
+            # runs first (when has-wayfinder), pnpm/yarn/npm always, both need it.
+            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "git@github.com:"
+          fi
+
       - name: Install Composer dependencies
         if: needs.detect.outputs.has-wayfinder == 'true'
         working-directory: ${{ inputs.working-directory }}
@@ -731,17 +762,6 @@ jobs:
           key: ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml', '**/yarn.lock', '**/package-lock.json') }}
           restore-keys: |
             ${{ needs.detect.outputs.package-manager }}-${{ runner.os }}-
-
-      - name: Configure git credentials for private dependencies
-        env:
-          GH_PAT: ${{ secrets.gh-pat }}
-        run: |
-          if [ -n "$GH_PAT" ]; then
-            # pnpm/npm normalize github.com git dependencies to the SSH shorthand
-            # (git@github.com:owner/repo.git) regardless of the protocol given in
-            # package.json, so the rewrite has to target that form, not https://.
-            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "git@github.com:"
-          fi
 
       - name: Install dependencies
         working-directory: ${{ inputs.working-directory }}
