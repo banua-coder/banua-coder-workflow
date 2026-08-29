@@ -166,7 +166,13 @@ jobs:
         id: changed-php
         if: inputs.lint-changed-only && github.event_name == 'pull_request'
         run: |
-          FILES=$(git diff --name-only --diff-filter=ACMR "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" -- '*.php')
+          # actions/checkout's fetch-depth: 0 deep-fetches the checked-out PR
+          # merge ref's own history (unshallowing the repo), but doesn't
+          # create a local origin/<base> ref -- fetch it by name (no depth
+          # limit, so it resolves against the already-unshallowed history)
+          # so merge-base works for the three-dot diff below.
+          git fetch origin "${{ github.event.pull_request.base.ref }}"
+          FILES=$(git diff --name-only --diff-filter=ACMR "origin/${{ github.event.pull_request.base.ref }}...HEAD" -- '*.php')
           {
             echo "files<<PINT_FILES_EOF"
             echo "$FILES"
