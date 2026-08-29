@@ -157,22 +157,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          # Full history is only needed to diff against the PR base when
-          # lint-changed-only is on; otherwise keep the default shallow clone.
-          fetch-depth: ${{ inputs.lint-changed-only && 0 || 1 }}
 
       - name: Determine changed PHP files
         id: changed-php
         if: inputs.lint-changed-only && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.gh-pat || github.token }}
         run: |
-          # actions/checkout's fetch-depth: 0 deep-fetches the checked-out PR
-          # merge ref's own history (unshallowing the repo), but doesn't
-          # create a local origin/<base> ref -- fetch it by name (no depth
-          # limit, so it resolves against the already-unshallowed history)
-          # so merge-base works for the three-dot diff below.
-          git fetch origin "${{ github.event.pull_request.base.ref }}"
-          FILES=$(git diff --name-only --diff-filter=ACMR "origin/${{ github.event.pull_request.base.ref }}...HEAD" -- '*.php')
+          # Ask GitHub directly for the PR's changed files instead of
+          # diffing local git history -- avoids shallow-clone/merge-base
+          # edge cases entirely (actions/checkout's fetch-depth: 0 for a
+          # pull_request event only deep-fetches the checked-out merge
+          # ref's own history, not a reliably diffable copy of the base
+          # branch, which broke a git-diff-based version of this step).
+          FILES=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --paginate --jq '.[] | select(.status != "removed") | .filename' | grep '\.php$' || true)
           {
             echo "files<<PINT_FILES_EOF"
             echo "$FILES"
