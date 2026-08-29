@@ -24,6 +24,10 @@ on:
         description: 'Run PHP linting (Pint)'
         type: boolean
         default: true
+      lint-changed-only:
+        description: 'On pull requests, run Pint only against PHP files changed in the diff (falls back to a full-repo lint on push events, where there is no base to diff against)'
+        type: boolean
+        default: false
       run-frontend-lint:
         description: 'Run frontend linting (ESLint/Prettier)'
         type: boolean
@@ -153,6 +157,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # Full history is only needed to diff against the PR base when
+          # lint-changed-only is on; otherwise keep the default shallow clone.
+          fetch-depth: ${{ inputs.lint-changed-only && 0 || 1 }}
+
+      - name: Determine changed PHP files
+        id: changed-php
+        if: inputs.lint-changed-only && github.event_name == 'pull_request'
+        run: |
+          FILES=$(git diff --name-only --diff-filter=ACMR "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" -- '*.php')
+          {
+            echo "files<<PINT_FILES_EOF"
+            echo "$FILES"
+            echo "PINT_FILES_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -191,13 +210,29 @@ jobs:
 
       - name: Run Pint
         working-directory: ${{ inputs.working-directory }}
+        env:
+          CHANGED_PHP_FILES: ${{ steps.changed-php.outputs.files }}
         run: |
           echo "## 🔍 PHP Lint Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
+          SCOPED=false
+          if [ "${{ inputs.lint-changed-only }}" = "true" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+            SCOPED=true
+          fi
+
           if [ -f "vendor/bin/pint" ]; then
-            ./vendor/bin/pint --test
-            echo "✅ Laravel Pint passed" >> $GITHUB_STEP_SUMMARY
+            if [ "$SCOPED" = "true" ]; then
+              if [ -z "$CHANGED_PHP_FILES" ]; then
+                echo "✅ No changed PHP files — Pint skipped" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "$CHANGED_PHP_FILES" | xargs ./vendor/bin/pint --test
+                echo "✅ Laravel Pint passed (changed files only)" >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              ./vendor/bin/pint --test
+              echo "✅ Laravel Pint passed" >> $GITHUB_STEP_SUMMARY
+            fi
           elif [ -f "vendor/bin/php-cs-fixer" ]; then
             ./vendor/bin/php-cs-fixer fix --dry-run --diff
             echo "✅ PHP CS Fixer passed" >> $GITHUB_STEP_SUMMARY
