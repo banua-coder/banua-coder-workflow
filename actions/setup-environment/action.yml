@@ -31,6 +31,10 @@ inputs:
     description: 'Java version (for Android)'
     required: false
     default: '17'
+  gh-pat:
+    description: 'GitHub token with read access to any private git dependency in package.json/composer.json (optional — a plain install otherwise has no credentials for private repos beyond the calling one)'
+    required: false
+    default: ''
 
 outputs:
   project-type:
@@ -101,6 +105,19 @@ runs:
 
         echo "📦 Project type: $PROJECT_TYPE"
         echo "📦 Package manager: $PACKAGE_MANAGER"
+
+    - name: Configure git credentials for private dependencies
+      if: inputs.gh-pat != ''
+      shell: bash
+      env:
+        GH_PAT: ${{ inputs.gh-pat }}
+      run: |
+        # Composer and pnpm/npm both normalize github.com git dependencies to
+        # the SSH shorthand (git@github.com:owner/repo.git) internally when
+        # cloning, regardless of the protocol given in composer.json/package.json,
+        # so the rewrite has to target that form, not https://. Runs before any
+        # install step below, since either package manager may hit this.
+        git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "git@github.com:"
 
     - name: Setup Node.js
       if: contains(fromJSON('["web-app", "npm-package"]'), steps.detect.outputs.project_type)

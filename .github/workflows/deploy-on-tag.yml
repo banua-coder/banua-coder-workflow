@@ -66,6 +66,9 @@ on:
       FIREBASE_TOKEN:
         description: 'Firebase token'
         required: false
+      GH_PAT:
+        description: 'GitHub PAT with read access to any private git dependency in package.json/composer.json (optional — falls back to GITHUB_TOKEN)'
+        required: false
     outputs:
       deploy-url:
         description: 'Deployment URL'
@@ -145,6 +148,7 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           php-version: ${{ inputs.php-version }}
+          gh-pat: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Build (custom command)
         if: inputs.build-command != ''
