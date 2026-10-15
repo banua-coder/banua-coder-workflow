@@ -54,10 +54,96 @@ on:
         type: boolean
         default: true
 
+      # Change scope (see README "Affected-only scope"). All off by default.
+      affected-only:
+        description: 'Run only what the change can break: skip every job when no changed file matches affected-paths, and pass the diff base to the tests (CI_AFFECTED_BASE). Full runs on PRs into main, release/* and hotfix/* PRs, and manual or scheduled runs.'
+        type: boolean
+        default: false
+      affected-paths:
+        description: 'Regex (grep -E) of repo-root paths that make the jobs run in affected-only mode. Empty means any file.'
+        type: string
+        default: ''
+      base-ref:
+        description: 'Diff base for affected-only and skip-version-only (a ref or SHA). Default: the merge base with the PR target, or the push before commit.'
+        type: string
+        default: ''
+      skip-version-only:
+        description: 'Skip every job when the change only bumps version lines (package.json, composer.json, pubspec.yaml, Cargo.toml and their lockfiles) and edits CHANGELOG.md, or changes nothing (a back-merge of a tested release).'
+        type: boolean
+        default: false
 jobs:
+  scope:
+    name: Scope
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+      full: ${{ steps.scope.outputs.full }}
+      base: ${{ steps.scope.outputs.base }}
+    steps:
+      # Full history without file contents: enough for merge-base and diffs.
+      - name: Checkout
+        if: inputs.affected-only || inputs.skip-version-only
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - name: Decide what runs
+        id: scope
+        shell: bash
+        env:
+          AFFECTED_ONLY: ${{ inputs.affected-only }}
+          AFFECTED_PATHS: ${{ inputs.affected-paths }}
+          SKIP_VERSION_ONLY: ${{ inputs.skip-version-only }}
+          BASE_REF: ${{ inputs.base-ref }}
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.base_ref }}
+          PR_HEAD: ${{ github.head_ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          out() { echo "$1" >>"$GITHUB_OUTPUT"; echo "scope: $1"; }
+          if [[ $AFFECTED_ONLY != true && $SKIP_VERSION_ONLY != true ]]; then
+            out run=true; out full=true; out base=; exit 0
+          fi
+          full=false
+          if [[ $EVENT == workflow_dispatch || $EVENT == schedule || $PR_BASE == main || $PR_HEAD == release/* || $PR_HEAD == hotfix/* ]]; then
+            full=true
+          fi
+          base=''
+          if [[ -n $BASE_REF ]]; then
+            base=$(git merge-base "$BASE_REF" HEAD)
+          elif [[ $EVENT == pull_request* ]]; then
+            base=$(git merge-base "origin/$PR_BASE" HEAD)
+          elif [[ -n $PUSH_BEFORE && ! $PUSH_BEFORE =~ ^0+$ ]] && git merge-base --is-ancestor "$PUSH_BEFORE" HEAD 2>/dev/null; then
+            base=$PUSH_BEFORE
+          fi
+          if [[ -z $base ]]; then full=true; base=$(git rev-parse HEAD); fi
+          files=$(git diff --name-only "$base" HEAD)
+          run=true
+          if [[ $SKIP_VERSION_ONLY == true ]]; then
+            version_only=true
+            if [[ -n $files ]]; then
+              if grep -vqE '(^|/)(package(-lock)?\.json|composer\.json|pubspec\.yaml|Cargo\.(toml|lock)|CHANGELOG\.md)$' <<<"$files"; then
+                version_only=false
+              else
+                lines=$(git diff -U0 "$base" HEAD -- . ':(exclude,glob)**/CHANGELOG.md' | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) ' || true)
+                if [[ -n $lines ]] && grep -vqE '^[+-][[:space:]]*("version": *"[^"]*",?|version: *[^ ]+|version *= *"[^"]*")$' <<<"$lines"; then
+                  version_only=false
+                fi
+              fi
+            fi
+            [[ $version_only == true ]] && run=false
+          fi
+          if [[ $AFFECTED_ONLY == true && $full != true ]]; then
+            if [[ -z $files ]] || ! grep -qE "${AFFECTED_PATHS:-.}" <<<"$files"; then run=false; fi
+          fi
+          out "run=$run"; out "full=$full"; out "base=$base"
+
   detect:
     name: Detect Configuration
     runs-on: ubuntu-latest
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
     outputs:
       has-tests: ${{ steps.detect.outputs.has_tests }}
       build-target: ${{ steps.detect.outputs.build_target }}
@@ -148,11 +234,17 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    needs: detect
+    needs: [scope, detect]
     if: inputs.run-tests && needs.detect.outputs.has-tests == 'true'
+    env:
+      # The diff base in affected-only mode, empty on full runs.
+      CI_AFFECTED_BASE: ${{ inputs.affected-only && needs.scope.outputs.full != 'true' && needs.scope.outputs.base || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        # The affected-only diff base must be in the history.
+        with:
+          fetch-depth: ${{ inputs.affected-only && '0' || '1' }}
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -290,8 +382,8 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [detect, lint, test]
-    if: always() && inputs.run-build && needs.detect.outputs.build-target != '' && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.test.result == 'success' || needs.test.result == 'skipped')
+    needs: [scope, detect, lint, test]
+    if: always() && needs.scope.outputs.run == 'true' && inputs.run-build && needs.detect.outputs.build-target != '' && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.test.result == 'success' || needs.test.result == 'skipped')
     steps:
       - name: Checkout
         uses: actions/checkout@v6
