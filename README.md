@@ -13,6 +13,7 @@ Reusable GitHub Actions workflows for Git Flow release management across multipl
 - 🧹 **Sanity Checks** - Code quality checks for Vue, Laravel, Dart/Flutter projects
 - 🛡️ **Backup & Rollback** - Automatic pre-deployment backup with rollback on failure (SSH)
 - 🔍 **Go CI** - Lint, test, coverage, and build for Go projects
+- 🎯 **Affected-only scope** - Opt-in: test only what a change can break, skip version-only bumps (see [Affected-only scope](#affected-only-scope))
 
 ## Supported Project Types
 
@@ -302,6 +303,53 @@ Notify Packagist about new release.
 | Input | Description | Default |
 |-------|-------------|---------|
 | `php-version` | PHP version | `8.2` |
+
+## Affected-only scope
+
+`ci-flutter.yml`, `ci-laravel.yml`, `ci-node.yml`, `ci-go.yml`, `ci-rust.yml`, `lint.yml` and `laravel-tests.yml` accept four optional inputs that make CI test each change once and only what it can break. All are off by default, so existing callers behave as before.
+
+| Input | Default | What it does |
+| --- | --- | --- |
+| `affected-only` | `false` | Skips every job when no changed file matches `affected-paths`. The test job gets the diff base in `CI_AFFECTED_BASE` (empty on full runs) and checks out the full history. `ci-flutter` uses it on melos workspaces: `melos exec --diff=<base> --include-dependents` for analyze and test. Other stacks pass it to their own command, for example `test-command: npx vitest run ${CI_AFFECTED_BASE:+--changed "$CI_AFFECTED_BASE"}`. PRs into `main`, `release/*` and `hotfix/*` PRs, and manual or scheduled runs are always full runs. |
+| `affected-paths` | any file | `grep -E` regex of repo-root paths that make the jobs run, for example `^(app/\|tests/\|composer\.lock$)`. |
+| `base-ref` | merge base with the PR target, or the push's before commit | Diff base, a ref or SHA. With no usable base (first push, force push) the run is full. |
+| `skip-version-only` | `false` | Skips every job when the change only bumps version lines (`package.json`, `composer.json`, `pubspec.yaml`, `Cargo.toml`, `package-lock.json`, `Cargo.lock`) and edits `CHANGELOG.md`, or changes nothing (a back-merge of a tested release). |
+
+A `scope` job decides this. Skipped jobs report success, so they can still be required checks; that is why the inputs gate jobs with `if:` instead of workflow `paths:` filters (GitHub reads `paths:` from the first 300 changed files only, and a skipped workflow leaves a required check pending).
+
+### Once-per-change triggers
+
+Set the triggers and the concurrency in the **caller**: a reusable workflow's run belongs to the caller's workflow, so only the caller can cancel superseded runs. Recommended:
+
+```yaml
+name: CI
+
+on:
+  # PRs are the test run. No push trigger on PR branches: it would test the
+  # same commits a second time.
+  pull_request:
+    branches: [develop, main]
+  # Direct pushes to develop only. Merges into main came through a PR that
+  # already passed, so main has no push trigger.
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+# Test workflows only. Never cancel deploy or release workflows.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    # Pin a tag or a commit SHA, not @main.
+    uses: banua-coder/banua-coder-workflow/.github/workflows/ci-flutter.yml@<tag-or-sha>
+    with:
+      affected-only: true
+      skip-version-only: true
+```
+
+Keep heavy jobs (APK/IPA builds, golden tests) out of this workflow: run them on release PRs, on tags, or on `workflow_dispatch`.
 
 ## Composite Actions
 
