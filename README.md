@@ -114,6 +114,7 @@ Main release workflow that handles the entire release process.
 | `develop-branch` | Development branch name | `develop` |
 | `changelog-format` | Changelog format: `keepachangelog`, `conventional`, `simple` | `keepachangelog` |
 | `auto-merge-backport` | Auto-merge back-merge PR | `false` |
+| `tag-prefix` | Prefix for the release tag. Use `v` when the registry only accepts `v{{version}}` tags (pub.dev automated publishing) | `''` |
 | `node-version` | Node.js version | `20` |
 | `pnpm-version` | pnpm version (empty = use packageManager from package.json) | `` |
 | `php-version` | PHP version | `8.2` |

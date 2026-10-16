@@ -51,6 +51,10 @@ on:
         description: 'Comma-separated list of additional paths to copy CHANGELOG.md to after generation'
         type: string
         default: ''
+      tag-prefix:
+        description: 'Prefix for the release tag (for example "v" creates v1.2.3). Empty keeps the bare version tag.'
+        type: string
+        default: ''
     secrets:
       GH_PAT:
         description: 'GitHub Personal Access Token (for creating PRs and pushing)'
@@ -319,7 +323,7 @@ jobs:
         id: create-tag
         run: |
           VERSION="${{ steps.extract-version.outputs.version }}"
-          TAG="$VERSION"
+          TAG="${TAG_PREFIX}${VERSION}"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -329,6 +333,8 @@ jobs:
 
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "🏷️ Created tag: $TAG"
+        env:
+          TAG_PREFIX: ${{ inputs.tag-prefix }}
 
   # ============================================
   # JOB 4: Post-Deploy Tasks
