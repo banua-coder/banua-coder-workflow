@@ -81,6 +81,18 @@ on:
         description: 'Additional SQLite database files to create (space-separated, e.g., "flags.sqlite cache.sqlite")'
         type: string
         default: ''
+      run-vulncheck:
+        description: 'Scan dependencies for known vulnerabilities'
+        type: boolean
+        default: true
+      vulncheck-severity-threshold:
+        description: 'Fail the vulnerability scan at or above this severity (low, medium, high, critical)'
+        type: string
+        default: 'high'
+      vulncheck-ignore-ids:
+        description: 'Advisories to ignore, one "<id> <reason>" per line'
+        type: string
+        default: ''
     secrets:
       gh-pat:
         description: 'GitHub PAT with read access to any private git dependency in package.json (optional — only needed when one is present; a plain pnpm/yarn/npm install otherwise has no credentials for private repos beyond this one)'
@@ -843,3 +855,14 @@ jobs:
           path: ${{ inputs.working-directory }}/public/build
           retention-days: 7
           if-no-files-found: ignore
+
+  vulncheck:
+    name: Vulnerability Scan
+    if: inputs.run-vulncheck
+    uses: banua-coder/banua-coder-workflow/.github/workflows/vulncheck.yml@main
+    with:
+      languages: 'php,node'
+      working-directory: ${{ inputs.working-directory }}
+      severity-threshold: ${{ inputs.vulncheck-severity-threshold }}
+      ignore-ids: ${{ inputs.vulncheck-ignore-ids }}
+      pnpm-version: ${{ inputs.pnpm-version }}
