@@ -1,0 +1,29 @@
+# Weekly vulnerability scan. New advisories appear without a push.
+# Copy this file to your project's .github/workflows/vulncheck.yml
+# A reusable workflow cannot schedule itself, so the schedule lives here.
+
+name: Vulnerability Scan
+
+on:
+  schedule:
+    # Monday 03:17 UTC. An off-peak minute avoids the busy start of the hour.
+    - cron: '17 3 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  vulncheck:
+    uses: banua-coder/banua-coder-workflow/.github/workflows/vulncheck.yml@v1
+    with:
+      languages: auto
+      severity-threshold: high
+      # One "<advisory-id> <reason>" per line. A line without a reason fails the job.
+      # ignore-ids: |
+      #   GHSA-xxxx-xxxx-xxxx not reachable, only used in tests, review by 2026-12-01
+
+  # Monorepo: add one job per directory.
+  # vulncheck-backend:
+  #   uses: banua-coder/banua-coder-workflow/.github/workflows/vulncheck.yml@v1
+  #   with:
+  #     working-directory: backend
