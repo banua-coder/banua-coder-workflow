@@ -68,6 +68,18 @@ on:
         description: 'Post coverage as PR comment'
         type: boolean
         default: true
+      run-vulncheck:
+        description: 'Scan dependencies for known vulnerabilities'
+        type: boolean
+        default: true
+      vulncheck-severity-threshold:
+        description: 'Fail the vulnerability scan at or above this severity (low, medium, high, critical)'
+        type: string
+        default: 'high'
+      vulncheck-ignore-ids:
+        description: 'Advisories to ignore, one "<id> <reason>" per line'
+        type: string
+        default: ''
 
 # Opt every JS action (actions/checkout, actions/setup-node,
 # actions/cache, pnpm/action-setup, etc.) into the Node 24 runtime
@@ -696,3 +708,14 @@ jobs:
             ${{ inputs.working-directory }}/out/
           retention-days: 7
           if-no-files-found: ignore
+
+  vulncheck:
+    name: Vulnerability Scan
+    if: inputs.run-vulncheck
+    uses: banua-coder/banua-coder-workflow/.github/workflows/vulncheck.yml@main
+    with:
+      languages: 'node'
+      working-directory: ${{ inputs.working-directory }}
+      severity-threshold: ${{ inputs.vulncheck-severity-threshold }}
+      ignore-ids: ${{ inputs.vulncheck-ignore-ids }}
+      pnpm-version: ${{ inputs.pnpm-version }}
