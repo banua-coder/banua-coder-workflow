@@ -436,7 +436,7 @@ How the cost stays low:
 Risks and limits:
 
 1. The skip check looks at manifests and lockfiles only. A code change that starts to call a vulnerable function is found by the next scheduled run, not by the push.
-2. The CI workflows call `vulncheck.yml@main`. A change on `main` reaches every `ci-*@v1` caller. Move this reference to a version tag when you cut `v1`.
+2. The CI workflows call `vulncheck.yml@v1`. Move the `v1` tag when you release a change to the scan.
 3. Yarn, Composer, and Cargo scans parse JSON from the tools. The tools can change their output format. Pinned tool versions and the "scan error fails the job" rule limit the damage.
 
 ## Composite Actions
