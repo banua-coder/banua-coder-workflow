@@ -1,0 +1,429 @@
+name: Vulnerability Scan
+
+# One job, one runner, one checkout. Only the tools for the detected languages are
+# installed. Each scan step appends normalized findings to $FINDINGS (JSON lines)
+# and the last step applies the ignore list and severity policy.
+
+on:
+  workflow_call:
+    inputs:
+      languages:
+        description: 'Comma-separated list of go, node, dart, php, rust, or auto to detect from manifest files'
+        type: string
+        default: 'auto'
+      working-directory:
+        description: 'Working directory'
+        type: string
+        default: '.'
+      severity-threshold:
+        description: 'Fail at or above this severity (low, medium, high, critical)'
+        type: string
+        default: 'high'
+      fail-on-findings:
+        description: 'Fail the job when blocking findings exist (false = report only)'
+        type: boolean
+        default: true
+      ignore-ids:
+        description: 'Allowlist, one "<advisory-id> <reason>" per line. A line without a reason fails the job.'
+        type: string
+        default: ''
+      include-dev-dependencies:
+        description: 'Also scan development dependencies (Node and PHP)'
+        type: boolean
+        default: false
+      only-on-dependency-change:
+        description: 'On push and pull_request, skip the scan unless a manifest or lockfile changed'
+        type: boolean
+        default: true
+      go-version:
+        description: 'Go version used by govulncheck'
+        type: string
+        default: 'stable'
+      pnpm-version:
+        description: 'pnpm version (used when a pnpm-lock.yaml is found)'
+        type: string
+        default: '10'
+      govulncheck-version:
+        description: 'govulncheck version'
+        type: string
+        default: 'v1.9.0'
+      osv-scanner-version:
+        description: 'osv-scanner version (used for Dart/Flutter)'
+        type: string
+        default: 'v2.7.0'
+      cargo-audit-version:
+        description: 'cargo-audit version'
+        type: string
+        default: 'v0.22.2'
+
+jobs:
+  scan:
+    name: Vulnerability Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      INCLUDE_DEV: ${{ inputs.include-dev-dependencies }}
+    steps:
+      # Runs before checkout: the file list comes from the API, so a skipped scan costs seconds.
+      - name: Check for dependency changes
+        id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          ONLY_ON_CHANGE: ${{ inputs.only-on-dependency-change }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          scan=true
+          if [ "$ONLY_ON_CHANGE" = "true" ] && { [ "$EVENT" = "pull_request" ] || [ "$EVENT" = "push" ]; }; then
+            files=""
+            if [ "$EVENT" = "pull_request" ]; then
+              files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename') || files="__error__"
+            elif [ -n "${BEFORE//0/}" ]; then
+              files=$(gh api "repos/$REPO/compare/$BEFORE...$SHA" --jq '.files[].filename') || files="__error__"
+            else
+              files="__error__"
+            fi
+            # On an API error, scan anyway: a missed scan is worse than a wasted one.
+            if [ "$files" != "__error__" ] && ! echo "$files" | grep -Eq '(^|/)(go\.(mod|sum)|package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|yarn\.lock|\.yarnrc\.yml|pubspec\.(yaml|lock)|composer\.(json|lock)|Cargo\.(toml|lock))$'; then
+              scan=false
+            fi
+          fi
+          echo "scan=$scan" >> "$GITHUB_OUTPUT"
+          if [ "$scan" = "false" ]; then
+            {
+              echo "## Vulnerability Scan"
+              echo ""
+              echo "Skipped: no manifest or lockfile changed. The scheduled scan covers new advisories."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Checkout
+        if: steps.changes.outputs.scan == 'true'
+        uses: actions/checkout@v6
+
+      - name: Detect languages
+        id: detect
+        if: steps.changes.outputs.scan == 'true'
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          LANGUAGES: ${{ inputs.languages }}
+        run: |
+          # Walk up from the working directory so workspace lockfiles are found.
+          find_up() {
+            local d f root
+            d=$(pwd -P)
+            root=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+            while :; do
+              for f in "$@"; do
+                if [ -f "$d/$f" ]; then echo "$d/$f"; return; fi
+              done
+              [ "$d" = "$root" ] && return
+              d=$(dirname "$d")
+            done
+          }
+
+          want() {
+            if [ "$LANGUAGES" = "auto" ]; then [ -f "$1" ]; else echo ",${LANGUAGES// /}," | grep -q ",$2,"; fi
+          }
+
+          langs=()
+          if want go.mod go; then
+            langs+=(go)
+          fi
+          if want package.json node; then
+            lock=$(find_up pnpm-lock.yaml yarn.lock package-lock.json npm-shrinkwrap.json)
+            if [ -n "$lock" ]; then
+              case "$(basename "$lock")" in
+                pnpm-lock.yaml) pm=pnpm ;;
+                yarn.lock) if grep -q '^__metadata:' "$lock"; then pm=yarn-berry; else pm=yarn-classic; fi ;;
+                *) pm=npm ;;
+              esac
+              echo "node_pm=$pm" >> "$GITHUB_OUTPUT"
+              langs+=(node)
+            else
+              echo "::notice::node: no supported lockfile found (bun.lockb is not supported), skipped"
+            fi
+          fi
+          if want pubspec.yaml dart; then
+            lock=$(find_up pubspec.lock)
+            if [ -n "$lock" ]; then
+              echo "dart_lock=$lock" >> "$GITHUB_OUTPUT"
+              langs+=(dart)
+            else
+              echo "::notice::dart: no pubspec.lock found, skipped"
+            fi
+          fi
+          if want composer.json php; then
+            if [ -n "$(find_up composer.lock)" ]; then langs+=(php); else echo "::notice::php: no composer.lock found, skipped"; fi
+          fi
+          if want Cargo.toml rust; then
+            lock=$(find_up Cargo.lock)
+            if [ -n "$lock" ]; then
+              echo "rust_lock=$lock" >> "$GITHUB_OUTPUT"
+              langs+=(rust)
+            else
+              echo "::notice::rust: no Cargo.lock found, skipped"
+            fi
+          fi
+
+          joined=$(IFS=,; echo "${langs[*]}")
+          echo "langs=$joined" >> "$GITHUB_OUTPUT"
+          echo "Languages to scan: ${joined:-none}"
+
+      - name: Prepare
+        if: steps.detect.outputs.langs != ''
+        run: |
+          {
+            echo "FINDINGS=$RUNNER_TEMP/findings.jsonl"
+            echo "ERRORS=$RUNNER_TEMP/errors.txt"
+            echo "TOOLS=$RUNNER_TEMP/vuln-tools"
+          } >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/vuln-tools" >> "$GITHUB_PATH"
+          : > "$RUNNER_TEMP/findings.jsonl"
+          : > "$RUNNER_TEMP/errors.txt"
+
+      # Tool binaries are cached by version, so installs only run on the first build.
+      - name: Cache scanner binaries
+        id: tools-cache
+        if: steps.detect.outputs.langs != ''
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/vuln-tools
+          key: vulncheck-${{ runner.os }}-${{ steps.detect.outputs.langs }}-${{ inputs.govulncheck-version }}-${{ inputs.osv-scanner-version }}-${{ inputs.cargo-audit-version }}-${{ inputs.go-version }}
+
+      - name: Setup Go
+        if: contains(steps.detect.outputs.langs, 'go')
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: true
+          cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+
+      - name: Install scanners
+        if: steps.detect.outputs.langs != '' && steps.tools-cache.outputs.cache-hit != 'true'
+        env:
+          LANGS: ${{ steps.detect.outputs.langs }}
+          GOVULNCHECK_VERSION: ${{ inputs.govulncheck-version }}
+          OSV_VERSION: ${{ inputs.osv-scanner-version }}
+          CARGO_AUDIT_VERSION: ${{ inputs.cargo-audit-version }}
+        run: |
+          mkdir -p "$TOOLS"
+          if [[ ",$LANGS," == *",go,"* ]]; then
+            GOBIN="$TOOLS" go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          fi
+          if [[ ",$LANGS," == *",dart,"* ]]; then
+            base="https://github.com/google/osv-scanner/releases/download/${OSV_VERSION}"
+            curl -fsSL -o "$TOOLS/osv-scanner" "$base/osv-scanner_linux_amd64"
+            curl -fsSL "$base/osv-scanner_SHA256SUMS" | grep ' osv-scanner_linux_amd64$' | sed 's# osv-scanner_linux_amd64$# osv-scanner#' > "$TOOLS/osv.sha256"
+            (cd "$TOOLS" && sha256sum -c osv.sha256 && rm osv.sha256)
+            chmod +x "$TOOLS/osv-scanner"
+          fi
+          if [[ ",$LANGS," == *",rust,"* ]]; then
+            url="https://github.com/rustsec/rustsec/releases/download/cargo-audit%2F${CARGO_AUDIT_VERSION}/cargo-audit-x86_64-unknown-linux-musl-${CARGO_AUDIT_VERSION}.tgz"
+            curl -fsSL "$url" | tar -xz --strip-components=1 -C "$TOOLS" --wildcards '*/cargo-audit'
+          fi
+
+      - name: Setup pnpm
+        if: contains(steps.detect.outputs.langs, 'node') && steps.detect.outputs.node_pm == 'pnpm'
+        env:
+          PNPM_VERSION: ${{ inputs.pnpm-version }}
+        run: npm install --global "pnpm@${PNPM_VERSION}"
+
+      - name: Scan Go (govulncheck)
+        if: contains(steps.detect.outputs.langs, 'go')
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          # With -format json, findings exit 0. A non-zero exit is a tool error.
+          if ! "$TOOLS/govulncheck" -format json ./... > "$RUNNER_TEMP/go.json" 2> "$RUNNER_TEMP/go.err"; then
+            echo "go: govulncheck failed: $(head -c 500 "$RUNNER_TEMP/go.err")" >> "$ERRORS"
+            exit 0
+          fi
+          # A finding is reachable when its trace names a function, not only a module or package.
+          jq -cs '
+            (map(select(.osv) | .osv) | map({key: .id, value: (.aliases // [])}) | from_entries) as $al
+            | [.[] | select(.finding) | .finding]
+            | group_by(.osv)[]
+            | . as $g
+            | ($g | map(select(.trace[0].function != null))) as $hit
+            | ($hit[0] // $g[0]).trace[0] as $t
+            | {lang: "go", id: $g[0].osv, aliases: ($al[$g[0].osv] // []), pkg: $t.module,
+               affected: ($t.version // "-"), fixed: ([$g[] | .fixed_version | select(.)] | first // "-"),
+               sev: "-", reach: (if ($hit | length) > 0 then "yes" else "no" end)}
+          ' "$RUNNER_TEMP/go.json" >> "$FINDINGS" || echo "go: could not parse govulncheck output" >> "$ERRORS"
+
+      - name: Scan Node (native audit)
+        if: contains(steps.detect.outputs.langs, 'node')
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          PM: ${{ steps.detect.outputs.node_pm }}
+        run: |
+          out="$RUNNER_TEMP/node.json"
+          prod=true; [ "$INCLUDE_DEV" = "true" ] && prod=false
+          # shellcheck disable=SC2016
+          case "$PM" in
+            pnpm)
+              args=(--json); [ "$prod" = true ] && args+=(--prod)
+              pnpm audit "${args[@]}" > "$out" 2> "$RUNNER_TEMP/node.err" || true
+              filter='(.advisories // error("no advisories key")) | to_entries[] | .value
+                | {lang: "node", id: (.github_advisory_id // (.id | tostring)), aliases: (.cves // []), pkg: .module_name,
+                   affected: .vulnerable_versions, fixed: (.patched_versions // "-"), sev: .severity, reach: "n/a"}'
+              ;;
+            npm)
+              args=(--json); [ "$prod" = true ] && args+=(--omit=dev)
+              npm audit "${args[@]}" > "$out" 2> "$RUNNER_TEMP/node.err" || true
+              filter='(.vulnerabilities // error("no vulnerabilities key")) | to_entries[] | .value as $v | $v.via[]?
+                | select(type == "object")
+                | {lang: "node", id: (.url | split("/") | last), aliases: [], pkg: .name, affected: (.range // "-"),
+                   fixed: ($v.fixAvailable | if type == "object" then "\(.name)@\(.version)" else "-" end),
+                   sev: .severity, reach: "n/a"}'
+              ;;
+            yarn-berry)
+              args=(--json); [ "$prod" = true ] && args+=(--environment production)
+              yarn npm audit "${args[@]}" > "$out" 2> "$RUNNER_TEMP/node.err" || true
+              filter='select(.children.URL != null)
+                | {lang: "node", id: (.children.URL | split("/") | last), aliases: [], pkg: .value,
+                   affected: (.children["Vulnerable Versions"] // "-"), fixed: "-", sev: .children.Severity, reach: "n/a"}'
+              ;;
+            yarn-classic)
+              args=(--json); [ "$prod" = true ] && args+=(--groups dependencies)
+              yarn audit "${args[@]}" > "$out" 2> "$RUNNER_TEMP/node.err" || true
+              filter='select(.type == "auditAdvisory") | .data.advisory
+                | {lang: "node", id: (.github_advisory_id // (.id | tostring)), aliases: (.cves // []), pkg: .module_name,
+                   affected: .vulnerable_versions, fixed: (.patched_versions // "-"), sev: .severity, reach: "n/a"}'
+              ;;
+          esac
+          # Yarn prints nothing when clean. For the others, empty output is a tool error.
+          if [ ! -s "$out" ] && [[ "$PM" != yarn-* ]]; then
+            echo "node: $PM audit gave no output: $(head -c 500 "$RUNNER_TEMP/node.err")" >> "$ERRORS"
+          elif ! jq -c "$filter" "$out" >> "$FINDINGS"; then
+            echo "node: could not parse $PM audit output" >> "$ERRORS"
+          fi
+
+      - name: Scan Dart and Flutter (osv-scanner)
+        if: contains(steps.detect.outputs.langs, 'dart')
+        env:
+          LOCK: ${{ steps.detect.outputs.dart_lock }}
+        run: |
+          # Exit 1 means findings and 0 means clean, so the JSON is parsed either way.
+          "$TOOLS/osv-scanner" scan source --format json --lockfile "$LOCK" > "$RUNNER_TEMP/dart.json" 2> "$RUNNER_TEMP/dart.err" || true
+          jq -c '
+            .results[]?.packages[]? | . as $p | ($p.groups // []) as $g
+            | $p.vulnerabilities[]? | . as $v
+            | {lang: "dart", id: $v.id, aliases: ($v.aliases // []), pkg: $p.package.name, affected: $p.package.version,
+               fixed: ([$v.affected[]? | select(.package.name == $p.package.name) | .ranges[]?.events[]? | .fixed | select(.)] | first // "-"),
+               sev: (($g | map(select(.ids | index($v.id))) | first | .max_severity) // $v.database_specific.severity),
+               reach: "n/a"}
+          ' "$RUNNER_TEMP/dart.json" >> "$FINDINGS" || echo "dart: osv-scanner failed: $(head -c 500 "$RUNNER_TEMP/dart.err")" >> "$ERRORS"
+
+      - name: Scan PHP (composer audit)
+        if: contains(steps.detect.outputs.langs, 'php')
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          args=(--locked --format=json --abandoned=ignore); [ "$INCLUDE_DEV" = "true" ] || args+=(--no-dev)
+          composer audit "${args[@]}" > "$RUNNER_TEMP/php.json" 2> "$RUNNER_TEMP/php.err" || true
+          # advisories is an empty list when clean and a map of package to list otherwise.
+          jq -c '
+            (.advisories // error("no advisories key")) | if type == "object" then to_entries | map(.value[]) else . end | .[]
+            | {lang: "php", id: .advisoryId, aliases: ([.cve] + [.sources[]?.remoteId] | map(select(.))), pkg: .packageName,
+               affected: .affectedVersions, fixed: "-", sev: (.severity // "unknown"), reach: "n/a"}
+          ' "$RUNNER_TEMP/php.json" >> "$FINDINGS" || echo "php: composer audit failed: $(head -c 500 "$RUNNER_TEMP/php.err")" >> "$ERRORS"
+
+      - name: Scan Rust (cargo audit)
+        if: contains(steps.detect.outputs.langs, 'rust')
+        env:
+          LOCK: ${{ steps.detect.outputs.rust_lock }}
+        run: |
+          # Exit 1 means findings, so the JSON is parsed either way.
+          # cargo-audit gives a CVSS vector, not a score, so severity is reported as unknown.
+          "$TOOLS/cargo-audit" audit --json --file "$LOCK" > "$RUNNER_TEMP/rust.json" 2> "$RUNNER_TEMP/rust.err" || true
+          jq -c '
+            (.vulnerabilities.list // error("no vulnerabilities key"))[]
+            | {lang: "rust", id: .advisory.id, aliases: (.advisory.aliases // []), pkg: .package.name, affected: .package.version,
+               fixed: ((.versions.patched // []) | join(" or ") | if . == "" then "-" else . end), sev: "unknown", reach: "n/a"}
+          ' "$RUNNER_TEMP/rust.json" >> "$FINDINGS" || echo "rust: cargo audit failed: $(head -c 500 "$RUNNER_TEMP/rust.err")" >> "$ERRORS"
+
+      - name: Report and apply policy
+        if: steps.detect.outputs.langs != ''
+        env:
+          THRESHOLD: ${{ inputs.severity-threshold }}
+          FAIL: ${{ inputs.fail-on-findings }}
+          IGNORE: ${{ inputs.ignore-ids }}
+          LANGS: ${{ steps.detect.outputs.langs }}
+        run: |
+          case "$THRESHOLD" in
+            low|medium|high|critical) ;;
+            *) echo "::error::severity-threshold must be low, medium, high or critical"; exit 1 ;;
+          esac
+
+          # Allowlist lines are "<id> <reason>". The reason is required.
+          ignore_json='{}'
+          bad=0
+          # shellcheck disable=SC2001
+          while IFS= read -r line; do
+            line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+            [ -z "$line" ] && continue
+            case "$line" in \#*) continue ;; esac
+            id=${line%%[[:space:]]*}
+            reason=$(echo "${line#"$id"}" | sed -e 's/^[[:space:]]*//')
+            if [ -z "$reason" ]; then
+              echo "::error::ignore-ids entry '$id' has no reason. Use: <advisory-id> <reason>"
+              bad=1
+              continue
+            fi
+            ignore_json=$(jq -c --arg id "$id" --arg r "$reason" '. + {($id): $r}' <<< "$ignore_json")
+          done <<< "$IGNORE"
+
+          jq -s --arg thr "$THRESHOLD" --argjson ign "$ignore_json" --arg langs "$LANGS" '
+            def rank: {"low": 1, "medium": 2, "moderate": 2, "high": 3, "critical": 4}[.] // 4;
+            def bucket:
+              if . == null or . == "" or . == "-" then "unknown"
+              elif (tonumber? // null) != null then (tonumber | if . >= 9 then "critical" elif . >= 7 then "high" elif . >= 4 then "medium" else "low" end)
+              else ascii_downcase | if . == "moderate" then "medium" else . end end;
+            def status:
+              if ([.id] + .aliases | map($ign[.]) | any(. != null)) then "ignored"
+              elif .reach == "no" then "not reachable"
+              elif (.sev | rank) < ($thr | rank) then "below threshold"
+              else "blocking" end;
+            unique_by([.lang, .id, .pkg])
+            | map(. + {sev: (.sev | bucket)})
+            | map(. + {status: status})
+            | sort_by(if .status == "blocking" then 0 else 1 end, .lang, .id) as $rows
+            | ($rows | map(select(.status == "blocking")) | length) as $blocking
+            | {blocking: $blocking,
+               md: ("## Vulnerability Scan\n\nLanguages: \($langs). Threshold: \($thr). Blocking findings: \($blocking) of \($rows | length).\n"
+                 + (if ($rows | length) == 0 then "\nNo known vulnerabilities found.\n" else
+                    "\n| Language | ID | Package | Affected | Fixed | Severity | Reachable | Status |\n|---|---|---|---|---|---|---|---|\n"
+                    + ($rows[0:100] | map("| \(.lang) | \(.id) | `\(.pkg)` | \(.affected | tostring | if length > 40 then .[0:37] + "..." else . end) | \(.fixed) | \(.sev) | \(.reach) | \(.status) |") | join("\n")) + "\n"
+                    + (if ($rows | length) > 100 then "\nShowing 100 of \($rows | length) findings.\n" else "" end) end))}
+          ' "$FINDINGS" > "$RUNNER_TEMP/result.json"
+
+          blocking=$(jq -r '.blocking' "$RUNNER_TEMP/result.json")
+          {
+            jq -r '.md' "$RUNNER_TEMP/result.json"
+            if [ "$ignore_json" != "{}" ]; then
+              echo ""
+              echo "Ignored advisories:"
+              jq -r 'to_entries[] | "- \(.key): \(.value)"' <<< "$ignore_json"
+            fi
+            if [ -s "$ERRORS" ]; then
+              echo ""
+              echo "Scan errors:"
+              sed 's/^/- /' "$ERRORS"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          while IFS= read -r e; do
+            [ -n "$e" ] && echo "::error::$e"
+          done < "$ERRORS"
+          echo "Blocking findings: $blocking"
+
+          if [ "$FAIL" = "true" ]; then
+            if [ "$blocking" -gt 0 ] || [ -s "$ERRORS" ] || [ "$bad" -ne 0 ]; then
+              exit 1
+            fi
+          elif [ "$blocking" -gt 0 ]; then
+            echo "::warning::$blocking blocking finding(s), not failing because fail-on-findings is false"
+          fi
