@@ -85,6 +85,9 @@ Full CI pipeline for Go projects: lint, test with coverage, and build.
 | `coverage-threshold` | Minimum coverage % (0 = disabled) | `0` |
 | `golangci-lint-version` | golangci-lint version | `v1.61.0` |
 | `post-coverage-comment` | Post coverage as PR comment | `true` |
+| `run-vulncheck` | Run the [vulnerability scan](#vulnerability-scanning) | `true` |
+| `vulncheck-severity-threshold` | Fail the scan at or above this severity | `high` |
+| `vulncheck-ignore-ids` | Advisories to ignore, one `<id> <reason>` per line | `` |
 
 > **Note:** golangci-lint v2.x requires `golangci-lint-version: v2.x.x` — the action uses `golangci-lint-action@v7` which supports v2.
 
@@ -304,6 +307,138 @@ Notify Packagist about new release.
 |-------|-------------|---------|
 | `php-version` | PHP version | `8.2` |
 
+## Vulnerability scanning
+
+`vulncheck.yml` scans the dependencies of a project for known vulnerabilities. A known vulnerability is a published advisory (a GHSA, CVE, or GO id) that affects a version you use. The workflow runs in one job on one runner. It installs only the tools for the languages it finds.
+
+The workflows `ci-go.yml`, `ci-node.yml`, `ci-flutter.yml`, `ci-laravel.yml`, and `ci-rust.yml` call it as a separate job named `vulncheck`. That job runs in parallel with the other jobs and never blocks them. To turn it off, set `run-vulncheck: false`.
+
+### Usage in a CI workflow
+
+```yaml
+jobs:
+  ci:
+    uses: banua-coder/banua-coder-workflow/.github/workflows/ci-go.yml@v1
+    with:
+      run-vulncheck: true               # default
+      vulncheck-severity-threshold: high # default
+      vulncheck-ignore-ids: |
+        GHSA-xxxx-xxxx-xxxx not reachable, used only in tests, review by 2026-12-01
+```
+
+The CI workflows pass only `run-vulncheck`, `vulncheck-severity-threshold`, and `vulncheck-ignore-ids`. For the other inputs, call `vulncheck.yml` directly.
+
+### Direct usage
+
+```yaml
+jobs:
+  vulncheck:
+    uses: banua-coder/banua-coder-workflow/.github/workflows/vulncheck.yml@v1
+    with:
+      languages: auto
+      working-directory: backend
+```
+
+If you want the scan to skip when no dependency file changed, give the caller workflow `pull-requests: read` permission. Without it, the skip check cannot read the changed files. The scan then always runs, which is safe.
+
+### Inputs of `vulncheck.yml`
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `languages` | Comma-separated list of `go`, `node`, `dart`, `php`, `rust`, or `auto` | `auto` |
+| `working-directory` | Directory of the project | `.` |
+| `severity-threshold` | Fail at or above this severity: `low`, `medium`, `high`, `critical` | `high` |
+| `fail-on-findings` | `false` reports findings and does not fail the job | `true` |
+| `ignore-ids` | Allowlist, one `<advisory-id> <reason>` per line | `` |
+| `include-dev-dependencies` | Also scan development dependencies (Node and PHP) | `false` |
+| `only-on-dependency-change` | On push and pull_request, skip unless a manifest or lockfile changed | `true` |
+| `go-version` | Go version used by govulncheck | `stable` |
+| `pnpm-version` | pnpm version, used when `pnpm-lock.yaml` is found | `10` |
+| `govulncheck-version` | govulncheck version | `v1.9.0` |
+| `osv-scanner-version` | osv-scanner version | `v2.7.0` |
+| `cargo-audit-version` | cargo-audit version | `v0.22.2` |
+
+With `languages: auto`, the workflow looks in `working-directory` for `go.mod`, `package.json`, `pubspec.yaml`, `composer.json`, and `Cargo.toml`. It then looks for the lockfile in that directory and in each parent directory up to the repository root. This finds workspace lockfiles. A language without a lockfile is skipped with a notice, because a scan without a lockfile checks no exact versions.
+
+### Languages and tools
+
+| Language | Lockfile | Tool | Reachability |
+|----------|----------|------|--------------|
+| Go | `go.mod` | `govulncheck` | Yes |
+| Node | `pnpm-lock.yaml` | `pnpm audit` | No |
+| Node | `package-lock.json` | `npm audit` | No |
+| Node | `yarn.lock` | `yarn npm audit` (Yarn 2+) or `yarn audit` (Yarn 1) | No |
+| Dart and Flutter | `pubspec.lock` | `osv-scanner` | No |
+| PHP and Laravel | `composer.lock` | `composer audit` | No |
+| Rust | `Cargo.lock` | `cargo audit` | No |
+
+Bun (`bun.lockb`) is not supported. The workflow skips it with a notice.
+
+`pnpm audit` checks the whole workspace lockfile. In a pnpm workspace, a scan of one package reports the advisories of every package in the workspace.
+
+### Step summary
+
+The job writes a table to the step summary. It has one row per finding with these columns: language, id, package, affected version, fixed version, severity, reachable, and status. The status is one of `blocking`, `below threshold`, `not reachable`, or `ignored`. The table shows the first 100 rows.
+
+### Severity policy
+
+A finding blocks the job when all of these are true:
+
+1. It is not on the `ignore-ids` list.
+2. It is not marked unreachable.
+3. Its severity is at or above `severity-threshold`.
+
+A finding with an unknown severity blocks at every threshold. `cargo audit` gives a CVSS vector and no score, so all Rust findings have unknown severity. The numeric scores from `osv-scanner` map to critical (9.0 or more), high (7.0 or more), medium (4.0 or more), and low.
+
+Go is different. `govulncheck` reports whether your code calls the vulnerable function. A finding that your code can reach blocks at every threshold. A finding in a module you only import is shown as `not reachable` and does not block. `govulncheck` gives no severity, so `severity-threshold` does not apply to Go.
+
+A scan error also fails the job when `fail-on-findings` is `true`. A scan that did not run must not look like a clean scan.
+
+### Ignore policy
+
+Use `ignore-ids` only when a finding is a false positive or you cannot fix it yet. Write one entry per line. Each entry is the advisory id, a space, and a reason:
+
+```yaml
+ignore-ids: |
+  GHSA-xxxx-xxxx-xxxx dev-only path, no network input, review by 2026-12-01
+  GO-2026-0000 fix needs a major upgrade, tracked in the team backlog
+```
+
+The reason is required. An entry without a reason fails the job. State why the finding is safe or when you will fix it. The entry matches the advisory id or any alias, such as a CVE id. The step summary lists every ignored entry with its reason. Lines that start with `#` are comments.
+
+### Weekly schedule
+
+A reusable workflow cannot schedule itself. The `schedule` trigger must be in the workflow of the caller. Copy [`examples/vulncheck-schedule.yml`](./examples/vulncheck-schedule.yml) to your repository. The scheduled run always scans, because the skip check applies only to push and pull_request events. This is how new advisories show up for code that did not change.
+
+### Design decision
+
+Problem: `govulncheck` found five reachable HTTP/2 vulnerabilities in `golang.org/x/net`, and CI did not catch them, because nothing scanned dependencies. GitHub Actions minutes cost money, so the scan must be cheap.
+
+Alternatives:
+
+| Option | Benefit | Cost |
+|--------|---------|------|
+| A. One `osv-scanner` pass over the whole repository | One tool, one job, all languages | No reachability, so Go reports every vulnerable module, including code you never call. Noisy. |
+| B. One job per language | Parallel, isolated logs | Each job pays for a runner start, a checkout, and a cache restore. A project with three languages pays three times. |
+| C. One job, native tool per language, `osv-scanner` only for Dart (chosen) | One runner start and one checkout. Uses the best tool for each ecosystem. | The job steps run in sequence. Several tools to keep pinned. |
+
+Why C: the native tools know their ecosystem best, and `govulncheck` is the only option that removes the unreachable noise. `pubspec.lock` has no native audit, so Dart uses `osv-scanner`. The sequential cost is small, because most projects have one or two languages and each scan takes seconds once the tools are cached.
+
+Why not a broader `osv-scanner` pass on top of C: it repeats the findings of the native tools under different ids, it adds a second table to read, and it has no reachability data. Add it later if a language needs coverage that the native tool lacks.
+
+How the cost stays low:
+
+1. The skip check runs before the checkout and uses the GitHub API. A push that changes no manifest or lockfile ends in seconds. The job still bills one minute at minimum.
+2. Tool versions are pinned and the binaries are cached by version. `osv-scanner` is checked against its published checksum.
+3. There is no matrix.
+4. Go uses the `setup-go` module cache. Node uses the native audit and needs no install step, because the audit reads the lockfile only.
+
+Risks and limits:
+
+1. The skip check looks at manifests and lockfiles only. A code change that starts to call a vulnerable function is found by the next scheduled run, not by the push.
+2. The CI workflows call `vulncheck.yml@main`. A change on `main` reaches every `ci-*@v1` caller. Move this reference to a version tag when you cut `v1`.
+3. Yarn, Composer, and Cargo scans parse JSON from the tools. The tools can change their output format. Pinned tool versions and the "scan error fails the job" rule limit the damage.
+
 ## Composite Actions
 
 ### `actions/bump-version`
@@ -361,6 +496,7 @@ See the [`examples/`](./examples) directory for complete workflow examples:
 - [`flutter-package.yml`](./examples/flutter-package.yml) - Flutter packages
 - [`flutter-app.yml`](./examples/flutter-app.yml) - Flutter mobile applications
 - [`php-package.yml`](./examples/php-package.yml) - PHP/Composer packages
+- [`vulncheck-schedule.yml`](./examples/vulncheck-schedule.yml) - Weekly vulnerability scan
 
 ## Release Flow
 
