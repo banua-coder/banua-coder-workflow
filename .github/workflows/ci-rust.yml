@@ -41,6 +41,18 @@ on:
         description: 'Feature flags passed to cargo (e.g., --features foo,bar)'
         type: string
         default: ''
+      run-vulncheck:
+        description: 'Scan dependencies for known vulnerabilities'
+        type: boolean
+        default: true
+      vulncheck-severity-threshold:
+        description: 'Fail the vulnerability scan at or above this severity (low, medium, high, critical)'
+        type: string
+        default: 'high'
+      vulncheck-ignore-ids:
+        description: 'Advisories to ignore, one "<id> <reason>" per line'
+        type: string
+        default: ''
 
 jobs:
   detect:
@@ -247,3 +259,13 @@ jobs:
               echo "✅ Build successful (library crate)" >> $GITHUB_STEP_SUMMARY
             fi
           fi
+
+  vulncheck:
+    name: Vulnerability Scan
+    if: inputs.run-vulncheck
+    uses: banua-coder/banua-coder-workflow/.github/workflows/vulncheck.yml@main
+    with:
+      languages: 'rust'
+      working-directory: ${{ inputs.working-directory }}
+      severity-threshold: ${{ inputs.vulncheck-severity-threshold }}
+      ignore-ids: ${{ inputs.vulncheck-ignore-ids }}

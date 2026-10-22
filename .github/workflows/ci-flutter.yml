@@ -72,6 +72,18 @@ on:
         description: 'Directories to check formatting (comma-separated)'
         type: string
         default: 'lib,test'
+      run-vulncheck:
+        description: 'Scan dependencies for known vulnerabilities'
+        type: boolean
+        default: true
+      vulncheck-severity-threshold:
+        description: 'Fail the vulnerability scan at or above this severity (low, medium, high, critical)'
+        type: string
+        default: 'high'
+      vulncheck-ignore-ids:
+        description: 'Advisories to ignore, one "<id> <reason>" per line'
+        type: string
+        default: ''
 
 jobs:
   detect:
@@ -567,3 +579,13 @@ jobs:
           else
             echo "✅ All assets within size limit" >> $GITHUB_STEP_SUMMARY
           fi
+
+  vulncheck:
+    name: Vulnerability Scan
+    if: inputs.run-vulncheck
+    uses: banua-coder/banua-coder-workflow/.github/workflows/vulncheck.yml@main
+    with:
+      languages: 'dart'
+      working-directory: ${{ inputs.working-directory }}
+      severity-threshold: ${{ inputs.vulncheck-severity-threshold }}
+      ignore-ids: ${{ inputs.vulncheck-ignore-ids }}
